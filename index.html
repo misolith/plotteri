@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="fi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Kalastusplotteri</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+ * { box-sizing: border-box; }
+ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #05141c; }
+ body {
+ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+ color: #d8e6ea;
+ }
+ .mono {
+ font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+ font-variant-numeric: tabular-nums;
+ }
+ #map { position: fixed; inset: 0; z-index: 1; background: #05141c; }
+
+ #hud {
+ position: fixed; top: 0; left: 0; right: 0; z-index: 500;
+ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; gap: 8px;
+ padding: calc(12px + env(safe-area-inset-top)) 14px 10px;
+ background: linear-gradient(180deg, rgba(5,20,28,0.88), rgba(5,20,28,0.18), rgba(5,20,28,0));
+ pointer-events: none;
+ }
+ .hud-block {
+ min-width: 0; pointer-events: auto; display: flex; align-items: center; gap: 7px;
+ background: rgba(5,20,28,0.78); border: 1px solid rgba(35,74,95,0.72);
+ border-radius: 8px; padding: 8px 9px; min-height: 46px; box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+ }
+ #hud .hud-block:nth-of-type(4) {
+ grid-column: 1 / -1; width: fit-content; max-width: 100%; min-height: 0;
+ background: rgba(5,20,28,0.24); border: 1px solid rgba(35,74,95,0.22); box-shadow: none;
+ padding: 3px 7px; opacity: 0.82;
+ }
+ .hud-label {
+ display: none;
+ }
+ .hud-wind-value {
+ min-width: 0; display: flex; align-items: center; gap: 4px;
+ font-size: 17px; font-weight: 700; color: #e8a13c; line-height: 1.2; white-space: nowrap;
+ text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ .wind-arrow {
+ width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+ color: #e8a13c; transform: rotate(var(--wind-rotation, 0deg)); transform-origin: center;
+ transition: transform 220ms ease, opacity 160ms ease;
+ filter: drop-shadow(0 1px 3px rgba(0,0,0,0.85));
+ }
+ .wind-arrow svg { width: 17px; height: 17px; display: block; }
+ .hud-weather-value {
+ min-width: 0; font-size: 17px; font-weight: 700; color: #d8e6ea; line-height: 1.2;
+ white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+ text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ .hud-speed-value {
+ min-width: 0; font-size: 17px; font-weight: 700; color: #9fc0ca; line-height: 1.2;
+ white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+ text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ .hud-sub-value {
+ font-size: 10px; color: #9fc0ca; line-height: 1.3; white-space: nowrap; overflow: hidden;
+ text-overflow: ellipsis; text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ #rec-indicator {
+ justify-self: end; display: flex; align-items: center; gap: 6px;
+ background: rgba(209,80,58,0.15); border: 1px solid #d1503a; color: #ff8a72;
+ padding: 5px 10px; border-radius: 20px; font-size: 12px; height: fit-content;
+ }
+ #rec-indicator.hidden { display: none; }
+ #rec-indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: #ff5a3d; animation: pulse 1.4s infinite; }
+ @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+ #controls {
+ position: fixed; z-index: 500; left: 0; right: 0; bottom: 0;
+ display: flex; justify-content: center; gap: 12px;
+ padding: 12px 14px calc(14px + env(safe-area-inset-bottom));
+ }
+ .ctrl-wrap { display: flex; flex-direction: column; align-items: center; gap: 5px; }
+ .ctrl {
+ width: 50px; height: 50px; border-radius: 50%;
+ background: #0b232f; border: 1px solid #163244; color: #d8e6ea;
+ display: flex; align-items: center; justify-content: center;
+ box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+ }
+ .ctrl.active { background: #e8a13c; color: #05141c; border-color: #e8a13c; }
+ .ctrl#btn-record.active { background: #d1503a; color: #fff; border-color: #d1503a; }
+ .ctrl:active { transform: scale(0.94); }
+ .ctrl-label { font-size: 10px; color: #6f8e99; letter-spacing: 0.03em; }
+ #map.mark-pick-mode { cursor: crosshair; }
+
+ .hidden { display: none !important; }
+
+ #panel {
+ position: fixed; z-index: 1000; inset: 0; background: rgba(5,20,28,0.97);
+ overflow-y: auto; padding: calc(18px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));
+ }
+ .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+ .panel-header h2 { font-size: 18px; margin: 0; }
+ .panel-header button, section > button {
+ background: #163244; color: #d8e6ea; border: 1px solid #234a5f; border-radius: 8px;
+ padding: 8px 14px; font-size: 14px;
+ }#panel section { margin-bottom: 28px; }
+ #panel h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: #6f8e99; margin: 0 0 10px; }
+ #panel .hint { font-size: 12px; color: #587882; margin-top: 8px; line-height: 1.5; }
+ #api-key-input {
+ width: 100%; background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 10px; font-size: 14px; margin-bottom: 8px;
+ }
+ .inline-form { display: flex; gap: 8px; align-items: center; }
+ .inline-form input {
+ flex: 1 1 auto; min-width: 0; background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 10px; font-size: 14px;
+ }
+ .inline-form button, .cache-actions button {
+ flex: 0 0 auto; background: #163244; color: #d8e6ea; border: 1px solid #234a5f;
+ border-radius: 8px; padding: 10px 12px; font-size: 14px;
+ }
+ .settings-grid { display: grid; gap: 9px; }
+ .settings-row {
+ display: flex; align-items: center; justify-content: space-between; gap: 12px;
+ min-height: 38px; padding: 7px 0; border-bottom: 1px solid #163244;
+ }
+ .settings-row:last-child { border-bottom: 0; }
+ .settings-row label { font-size: 14px; color: #d8e6ea; }
+ .settings-row input[type="number"] {
+ width: 92px; background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 8px; font-size: 14px;
+ }
+ .settings-row input[type="checkbox"] {
+ width: 22px; height: 22px; flex: 0 0 auto; accent-color: #e8a13c;
+ }
+ .cache-actions { display: flex; gap: 8px; margin-top: 10px; }
+ #place-results { list-style: none; margin: 10px 0 0; padding: 0; }
+ .place-result {
+ width: 100%; text-align: left; display: block; background: transparent; color: #d8e6ea;
+ border: 0; border-bottom: 1px solid #163244; padding: 10px 0; font-size: 14px;
+ }
+ .place-result-sub { display: block; color: #6f8e99; font-size: 12px; margin-top: 2px; }
+ #track-list, #waypoint-list { list-style: none; margin: 0; padding: 0; }
+ .list-item {
+ display: flex; justify-content: space-between; align-items: center;
+ padding: 10px 0; border-bottom: 1px solid #163244; gap: 10px;
+ }
+ .list-item-title { font-size: 14px; }
+ .list-item-sub { font-size: 12px; color: #6f8e99; margin-top: 2px; }
+ .list-item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+ .list-item-actions button {
+ background: #163244; color: #d8e6ea; border: 1px solid #234a5f; border-radius: 6px;
+ padding: 6px 10px; font-size: 12px;
+ }
+ .track-toggle-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+ .poi-settings {
+ display: grid; gap: 8px;
+ }
+ .poi-toggle-row {
+ display: flex; align-items: center; justify-content: space-between; gap: 12px;
+ min-height: 38px; padding: 7px 0; border-bottom: 1px solid #163244;
+ }
+ .poi-toggle-row:last-child { border-bottom: 0; }
+ .poi-toggle-label {
+ display: flex; align-items: center; gap: 9px; min-width: 0; font-size: 14px;
+ }
+ .poi-toggle-label .poi-marker {
+ flex: 0 0 auto; width: 22px; height: 22px; font-size: 13px; box-shadow: none;
+ }
+ .poi-toggle-row input {
+ width: 22px; height: 22px; flex: 0 0 auto; accent-color: #e8a13c;
+ }
+
+ .modal-overlay {
+ position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.6);
+ display: flex; align-items: flex-end; justify-content: center;
+ }
+ .modal-overlay.hidden { display: none; }
+ .modal {
+ background: #0b232f; border: 1px solid #163244; border-radius: 16px 16px 0 0;
+ width: 100%; max-width: 480px; padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+ }
+ .modal h3 { margin: 0 0 14px; font-size: 16px; }
+ .modal label { font-size: 12px; color: #6f8e99; display: block; margin: 10px 0 4px; }
+ .modal input, .modal textarea {
+ width: 100%; background: #05141c; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 9px 10px; font-size: 14px; font-family: inherit;
+ }
+ .modal textarea { min-height: 60px; resize: vertical; }
+ .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+ .modal-actions button {
+ background: #163244; color: #d8e6ea; border: 1px solid #234a5f; border-radius: 8px;
+ padding: 9px 16px; font-size: 14px;
+ }
+ #wp-save { background: #e8a13c !important; color: #05141c !important; border: none !important; font-weight: 600; }
+
+ .wp-dot {
+ width: 14px; height: 14px; border-radius: 50%; background: #e8a13c;
+ border: 2px solid #05141c; box-shadow: 0 0 0 1px #e8a13c;
+ }
+ .poi-marker {
+ width: 24px; height: 24px; border-radius: 50%;
+ display: flex; align-items: center; justify-content: center;
+ border: 1px solid rgba(216,230,234,0.78); box-shadow: 0 2px 8px rgba(0,0,0,0.46);
+ color: #05141c; font-size: 14px; line-height: 1;
+ }
+ .poi-firepit { background: #ff8a3d; }
+ .poi-shelter { background: #8ed1a8; }
+ .poi-fuel { background: #f3d76d; }
+ .poi-terrace { background: #69c7dc; }
+
+ .leaflet-control-layers, .leaflet-control-zoom a, .leaflet-control-scale-line {
+ background: #0b232f !important; color: #d8e6ea !important; border-color: #163244 !important;
+ }
+ .leaflet-bottom.leaflet-right { bottom: calc(82px + env(safe-area-inset-bottom)); }
+
+ @media (prefers-reduced-motion: reduce) {
+ #rec-indicator .dot { animation: none; }
+ }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="hud">
+ <div class="hud-block">
+ <div class="hud-label">Tuuli</div>
+ <div id="hud-wind" class="hud-wind-value mono">
+ <span id="hud-wind-arrow" class="wind-arrow" aria-hidden="true">
+ <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V4"/><path d="M6 10l6-6 6 6"/></svg>
+ </span>
+ <span id="hud-wind-speed">-- m/s</span>
+ </div>
+ </div>
+ <div class="hud-block">
+ <div class="hud-label">Sää</div>
+ <div id="hud-weather" class="hud-weather-value mono">-- C</div>
+ </div>
+ <div class="hud-block">
+ <div class="hud-label">Nopeus</div>
+ <div id="hud-speed" class="hud-speed-value mono">-- km/h</div>
+ </div>
+ <div class="hud-block">
+ <div class="hud-label">Sijainti</div>
+ <div id="hud-coords" class="hud-sub-value mono">haetaan sijaintia</div>
+ </div>
+ <div id="rec-indicator" class="hidden">
+ <span class="dot"></span><span id="rec-time" class="mono">00:00</span>
+ </div>
+</div>
+
+<div id="controls">
+ <div class="ctrl-wrap">
+ <button id="btn-follow" class="ctrl active" title="Seuraa sijaintia">
+ <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+ </button>
+ <span class="ctrl-label">Seuraa</span>
+ </div>
+ <div class="ctrl-wrap">
+ <button id="btn-record" class="ctrl" title="Tallenna reitti"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/></svg>
+ </button>
+ <span class="ctrl-label">Reitti</span>
+ </div>
+ <div class="ctrl-wrap">
+ <button id="btn-mark" class="ctrl" title="Merkitse kalapaikka">
+ <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 4c3-2 5 2 8 0v8c-3 2-5-2-8 0"/></svg>
+ </button>
+ <span id="mark-label" class="ctrl-label">Merkitse</span>
+ </div>
+ <div class="ctrl-wrap">
+ <button id="btn-search" class="ctrl" title="Hae paikannimeä">
+ <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="21" y2="21"/></svg>
+ </button>
+ <span class="ctrl-label">Haku</span>
+ </div>
+ <div class="ctrl-wrap">
+ <button id="btn-panel" class="ctrl" title="Tiedot ja asetukset">
+ <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+ </button>
+ <span class="ctrl-label">Tiedot</span>
+ </div>
+</div>
+
+<div id="panel" class="hidden">
+ <div class="panel-header">
+ <h2>Tiedot ja asetukset</h2>
+ <button id="panel-close">Sulje</button>
+ </div>
+
+ <section>
+ <h3>MML API-avain</h3>
+ <input id="api-key-input" type="text" placeholder="Liitä API-avain tähän">
+ <button id="api-key-save">Tallenna avain</button>
+ <p class="hint">Ilmainen avain: Maanmittauslaitoksen OmaTili-palvelu. Ilman avainta karttana on OpenStreetMap-varakartta.</p>
+ </section>
+
+ <section id="place-search-section">
+ <h3>Paikannimihaku</h3>
+ <div class="inline-form">
+ <input id="place-search-input" type="search" placeholder="Saari, lahti, selkä, kari...">
+ <button id="place-search-btn">Hae</button>
+ </div>
+ <ul id="place-results"></ul>
+ <p id="place-search-status" class="hint">Haku käyttää MML:n nimistöpalvelua ja samaa API-avainta.</p>
+ </section>
+
+ <section>
+ <h3>Sääkerrokset</h3>
+ <label class="settings-row">
+ <span>🌧 Sadetutka</span>
+ <input id="radar-toggle" type="checkbox" checked>
+ </label>
+ <p class="hint">FMI:n viimeisin sadetutkakuva kartan päällä.</p>
+ </section>
+
+ <section>
+ <h3>Karttavälimuisti</h3>
+ <div class="settings-grid">
+ <label class="settings-row">
+ <span>Tallenna katsotut tilet</span>
+ <input id="tile-cache-enabled" type="checkbox">
+ </label>
+ <div class="settings-row">
+ <label for="tile-cache-max">Maksimi</label>
+ <input id="tile-cache-max" type="number" min="100" max="5000" step="100" inputmode="numeric">
+ </div>
+ <div class="settings-row">
+ <label for="tile-cache-days">Päivät</label>
+ <input id="tile-cache-days" type="number" min="1" max="30" step="1" inputmode="numeric">
+ </div>
+ </div>
+ <div class="cache-actions">
+ <button id="tile-cache-apply">Tallenna</button>
+ <button id="tile-cache-clear">Tyhjennä</button>
+ </div>
+ <p id="tile-cache-status" class="hint">Cache koskee vain kartassa katsottuja tilejä.</p>
+ </section>
+
+ <section>
+ <h3>Karttakohteet</h3>
+ <div class="poi-settings">
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-firepit">🔥</span><span>Nuotiopaikat</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="firepit" checked>
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-shelter">⌂</span><span>Laavut</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="shelter" checked>
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-fuel">⛽</span><span>Bensa-asemat</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="fuel" checked>
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-terrace">☕</span><span>Terassit</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="terrace" checked>
+ </label>
+ </div>
+ <p class="hint">OSM-kohteet latautuvat nykyisestä karttanäkymästä lähizoomilla.</p>
+ </section>
+
+ <section>
+ <h3>Reitit</h3>
+ <ul id="track-list"></ul>
+ <p id="track-empty" class="hint">Ei tallennettuja reittejä.</p>
+ </section>
+
+ <section>
+ <h3>Kalapaikat</h3>
+ <ul id="waypoint-list"></ul>
+ <p id="waypoint-empty" class="hint">Ei tallennettuja kalapaikkoja.</p>
+ </section>
+
+ <section>
+ <button id="export-btn">Vie GeoJSON-tiedostona</button>
+ </section>
+</div>
+
+<div id="marker-modal" class="modal-overlay hidden">
+ <div class="modal">
+ <h3>Merkitse kalapaikka</h3>
+ <label for="wp-name">Nimi</label>
+ <input id="wp-name" type="text" placeholder="esim. Kivikko">
+ <label for="wp-note">Muistiinpano</label>
+ <textarea id="wp-note" placeholder="Saalis, sää, viehe..."></textarea>
+ <label for="wp-speed">Nopeus (km/h)</label>
+ <input id="wp-speed" type="number" step="0.1" inputmode="decimal">
+ <div class="modal-actions">
+ <button id="wp-cancel">Peruuta</button>
+ <button id="wp-save">Tallenna</button>
+ </div>
+ </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script type="module">
+(async function () {
+ 'use strict';
+
+ var TRANSPARENT_PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+ // ---------- storage helpers (window.storage with localStorage fallback) ----------
+ async function loadJSON(key, fallback) {
+ try {
+ if (window.storage && window.storage.get) {
+ var res = await window.storage.get(key, false);
+ return res ? JSON.parse(res.value) : fallback;
+ }
+ var localValue = window.localStorage ? window.localStorage.getItem('kalastusplotteri:' + key) : null;
+ return localValue ? JSON.parse(localValue) : fallback;
+ } catch (e) {
+ return fallback;
+ }
+ }
+ async function saveJSON(key, value) {
+ try {
+ if (window.storage && window.storage.set) {
+ await window.storage.set(key, JSON.stringify(value), false);
+ } else if (window.localStorage) {
+ window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
+ }
+ return true;
+ } catch (e) {
+ console.error('Tallennus epaonnistui:', key, e);
+ return false;
+ }
+ }
+ async function deleteKey(key) {
+ try {
+ if (window.storage && window.storage.delete) await window.storage.delete(key, false);
+ else if (window.localStorage) window.localStorage.removeItem('kalastusplotteri:' + key);
+ } catch (e) { /* key did not exist, ignore */ }
+ }
+
+ function escapeHtml(str) {
+ var d = document.createElement('div');
+ d.textContent = str == null ? '' : String(str);
+ return d.innerHTML;
+ }
+
+ function haversine(lat1, lon1, lat2, lon2) {
+ var R = 6371000;
+ function toRad(d) { return (d * Math.PI) / 180; }
+ var dLat = toRad(lat2 - lat1);
+ var dLon = toRad(lon2 - lon1);
+ var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+ Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+ return 2 * R * Math.asin(Math.sqrt(a));
+ }
+
+ function formatSpeed(speedKmh) {
+ return speedKmh != null && isFinite(speedKmh) ? speedKmh.toFixed(1) + ' km/h' : '-- km/h';
+ }
+
+ function gpsSpeedKmh(pos, previousPos, now) {
+ var speedMs = Number(pos.coords.speed);
+ var speedKmh = null;
+ if (!isNaN(speedMs) && speedMs >= 0) speedKmh = speedMs * 3.6;
+ else {
+ if (!previousPos || !previousPos.t) return null;
+ var dt = (now - previousPos.t) / 1000;
+ if (dt <= 0 || dt > 30) return null;
+ speedKmh = (haversine(previousPos.lat, previousPos.lon, pos.coords.latitude, pos.coords.longitude) / dt) * 3.6;
+ }
+ return speedKmh < 0.2 ? 0 : speedKmh;
+ }
+
+ // ---------- DOM refs ----------
+ var hudCoords = document.getElementById('hud-coords');
+ var hudWind = document.getElementById('hud-wind');
+ var hudWindArrow = document.getElementById('hud-wind-arrow');
+ var hudWindSpeed = document.getElementById('hud-wind-speed');
+ var hudWeather = document.getElementById('hud-weather');
+ var hudSpeed = document.getElementById('hud-speed');
+ var recIndicator = document.getElementById('rec-indicator');
+ var recTime = document.getElementById('rec-time');
+ var btnFollow = document.getElementById('btn-follow');
+ var btnRecord = document.getElementById('btn-record');
+ var btnMark = document.getElementById('btn-mark');
+ var markLabel = document.getElementById('mark-label');
+ var btnSearch = document.getElementById('btn-search');
+ var btnPanel = document.getElementById('btn-panel');
+ var panel = document.getElementById('panel');
+ var panelClose = document.getElementById('panel-close');
+ var placeSearchSection = document.getElementById('place-search-section');
+ var apiKeyInput = document.getElementById('api-key-input');
+ var apiKeySave = document.getElementById('api-key-save');
+ var placeSearchInput = document.getElementById('place-search-input');
+ var placeSearchBtn = document.getElementById('place-search-btn');
+ var placeResultsEl = document.getElementById('place-results');
+ var placeSearchStatus = document.getElementById('place-search-status');
+ var radarToggle = document.getElementById('radar-toggle');
+ var tileCacheEnabled = document.getElementById('tile-cache-enabled');
+ var tileCacheMax = document.getElementById('tile-cache-max');
+ var tileCacheDays = document.getElementById('tile-cache-days');
+ var tileCacheApply = document.getElementById('tile-cache-apply');
+ var tileCacheClear = document.getElementById('tile-cache-clear');
+ var tileCacheStatus = document.getElementById('tile-cache-status');
+ var poiToggleInputs = Array.prototype.slice.call(document.querySelectorAll('.poi-toggle'));
+ var trackListEl = document.getElementById('track-list');
+ var trackEmpty = document.getElementById('track-empty');
+ var waypointListEl = document.getElementById('waypoint-list');
+ var waypointEmpty = document.getElementById('waypoint-empty');
+ var exportBtn = document.getElementById('export-btn');
+ var markerModal = document.getElementById('marker-modal');
+ var wpName = document.getElementById('wp-name');
+ var wpNote = document.getElementById('wp-note');
+ var wpSpeed = document.getElementById('wp-speed');
+ var wpCancel = document.getElementById('wp-cancel');
+ var wpSave = document.getElementById('wp-save');
+
+ // ---------- state ----------
+ var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true };
+ var defaultTileCache = { enabled: true, maxTiles: 1200, ttlDays: 7 };
+ var municipalityNames = {
+ '5': 'Alajarvi', '9': 'Alavieska', '10': 'Alavus', '16': 'Asikkala', '18': 'Askola',
+ '19': 'Aura', '20': 'Akaa', '35': 'Brando', '43': 'Eckero', '46': 'Enonkoski',
+ '47': 'Enontekio', '49': 'Espoo', '50': 'Eura', '51': 'Eurajoki', '52': 'Evijarvi',
+ '60': 'Finstrom', '61': 'Forssa', '62': 'Foglo', '65': 'Geta', '69': 'Haapajarvi',
+ '71': 'Haapavesi', '72': 'Hailuoto', '74': 'Halsua', '75': 'Hamina', '76': 'Hammarland',
+ '77': 'Hankasalmi', '78': 'Hanko', '79': 'Harjavalta', '81': 'Hartola', '82': 'Hattula',
+ '86': 'Hausjarvi', '90': 'Heinavesi', '91': 'Helsinki', '92': 'Vantaa', '97': 'Hirvensalmi',
+ '98': 'Hollola', '99': 'Honkajoki', '102': 'Huittinen', '103': 'Humppila', '105': 'Hyrynsalmi',
+ '106': 'Hyvinkaa', '108': 'Hameenkyro', '109': 'Hameenlinna', '111': 'Heinola', '139': 'Ii',
+ '140': 'Iisalmi', '142': 'Iitti', '143': 'Ikaalinen', '145': 'Ilmajoki', '146': 'Ilomantsi',
+ '148': 'Inari', '149': 'Inkoo', '151': 'Isojoki', '152': 'Isokyro', '153': 'Imatra',
+ '165': 'Janakkala', '167': 'Joensuu', '169': 'Jokioinen', '170': 'Jomala', '171': 'Joroinen',
+ '172': 'Joutsa', '176': 'Juuka', '177': 'Juupajoki', '178': 'Juva', '179': 'Jyvaskyla',
+ '181': 'Jamijarvi', '182': 'Jamsa', '186': 'Jarvenpaa', '202': 'Kaarina', '204': 'Kaavi',
+ '205': 'Kajaani', '208': 'Kalajoki', '211': 'Kangasala', '213': 'Kangasniemi', '214': 'Kankaanpaa',
+ '216': 'Kannonkoski', '217': 'Kannus', '218': 'Karijoki', '224': 'Karkkila', '226': 'Karstula',
+ '230': 'Karvia', '231': 'Kaskinen', '232': 'Kauhajoki', '233': 'Kauhava', '235': 'Kauniainen',
+ '236': 'Kaustinen', '239': 'Keitele', '240': 'Kemi', '241': 'Keminmaa', '244': 'Kempele',
+ '245': 'Kerava', '249': 'Keuruu', '250': 'Kihnio', '256': 'Kinnula', '257': 'Kirkkonummi',
+ '260': 'Kitee', '261': 'Kittila', '263': 'Kiuruvesi', '265': 'Kivijarvi', '271': 'Kokemaki',
+ '272': 'Kokkola', '273': 'Kolari', '275': 'Konnevesi', '276': 'Kontiolahti', '280': 'Korsnas',
+ '284': 'Koski Tl', '285': 'Kotka', '286': 'Kouvola', '287': 'Kristiinankaupunki', '288': 'Kruunupyy',
+ '290': 'Kuhmo', '291': 'Kuhmoinen', '295': 'Kumlinge', '297': 'Kuopio', '300': 'Kuortane',
+ '301': 'Kurikka', '304': 'Kustavi', '305': 'Kuusamo', '309': 'Outokumpu', '312': 'Kyyjarvi',
+ '316': 'Karkola', '317': 'Karsamaki', '318': 'Kokar', '320': 'Kemijarvi', '322': 'Kemionsaari',
+ '398': 'Lahti', '399': 'Laihia', '400': 'Laitila', '402': 'Lapinlahti', '403': 'Lappajarvi',
+ '405': 'Lappeenranta', '407': 'Lapinjarvi', '408': 'Lapua', '410': 'Laukaa', '416': 'Lemi',
+ '417': 'Lemland', '418': 'Lempaala', '420': 'Leppavirta', '421': 'Lestijarvi', '422': 'Lieksa',
+ '423': 'Lieto', '425': 'Liminka', '426': 'Liperi', '430': 'Loimaa', '433': 'Loppi',
+ '434': 'Loviisa', '435': 'Luhanka', '436': 'Lumijoki', '438': 'Lumparland', '440': 'Luoto',
+ '441': 'Luumaki', '444': 'Lohja', '445': 'Parainen', '475': 'Maalahti', '478': 'Maarianhamina',
+ '480': 'Marttila', '481': 'Masku', '483': 'Merijarvi', '484': 'Merikarvia', '489': 'Miehikkala',
+ '491': 'Mikkeli', '494': 'Muhos', '495': 'Multia', '498': 'Muonio', '499': 'Mustasaari',
+ '500': 'Muurame', '503': 'Mynamaki', '504': 'Myrskyla', '505': 'Mantsala', '507': 'Mantyharju',
+ '508': 'Mantta-Vilppula', '529': 'Naantali', '531': 'Nakkila', '535': 'Nivala', '536': 'Nokia',
+ '538': 'Nousiainen', '541': 'Nurmes', '543': 'Nurmijarvi', '545': 'Narpio', '560': 'Orimattila',
+ '561': 'Oripaa', '562': 'Orivesi', '563': 'Oulainen', '564': 'Oulu', '576': 'Padasjoki',
+ '577': 'Paimio', '578': 'Paltamo', '580': 'Parikkala', '581': 'Parkano', '583': 'Pelkosenniemi',
+ '584': 'Perho', '588': 'Pertunmaa', '592': 'Petajavesi', '593': 'Pieksamaki', '595': 'Pielavesi',
+ '598': 'Pietarsaari', '599': 'Pedersoren kunta', '601': 'Pihtipudas', '604': 'Pirkkala', '607': 'Polvijarvi',
+ '608': 'Pomarkku', '609': 'Pori', '611': 'Pornainen', '614': 'Posio', '615': 'Pudasjarvi',
+ '616': 'Pukkila', '619': 'Punkalaidun', '620': 'Puolanka', '623': 'Puumala', '624': 'Pyhtaa',
+ '625': 'Pyhajoki', '626': 'Pyhajarvi', '630': 'Pyhanta', '631': 'Pyharanta', '635': 'Palkane',
+ '636': 'Poytya', '638': 'Porvoo', '678': 'Raahe', '680': 'Raisio', '681': 'Rantasalmi',
+ '683': 'Ranua', '684': 'Rauma', '686': 'Rautalampi', '687': 'Rautavaara', '689': 'Rautjarvi',
+ '691': 'Reisjarvi', '694': 'Riihimaki', '697': 'Ristijarvi', '698': 'Rovaniemi', '700': 'Ruokolahti',
+ '702': 'Ruovesi', '704': 'Rusko', '707': 'Raakkyla', '710': 'Raasepori', '729': 'Saarijarvi',
+ '732': 'Salla', '734': 'Salo', '736': 'Saltvik', '738': 'Sauvo', '739': 'Savitaipale',
+ '740': 'Savonlinna', '742': 'Savukoski', '743': 'Seinajoki', '746': 'Sievi', '747': 'Siikainen',
+ '748': 'Siikajoki', '749': 'Siilinjarvi', '751': 'Simo', '753': 'Sipoo', '755': 'Siuntio',
+ '758': 'Sodankyla', '759': 'Soini', '761': 'Somero', '762': 'Sonkajarvi', '765': 'Sotkamo',
+ '766': 'Sottunga', '768': 'Sulkava', '771': 'Sund', '777': 'Suomussalmi', '778': 'Suonenjoki',
+ '781': 'Sysma', '783': 'Sakyla', '785': 'Vaala', '790': 'Sastamala', '791': 'Siikalatva',
+ '831': 'Taipalsaari', '832': 'Taivalkoski', '833': 'Taivassalo', '834': 'Tammela', '837': 'Tampere',
+ '844': 'Tervo', '845': 'Tervola', '846': 'Teuva', '848': 'Tohmajarvi', '849': 'Toholampi',
+ '850': 'Toivakka', '851': 'Tornio', '853': 'Turku', '854': 'Pello', '857': 'Tuusniemi',
+ '858': 'Tuusula', '859': 'Tyrnava', '886': 'Ulvila', '887': 'Urjala', '889': 'Utajarvi',
+ '890': 'Utsjoki', '892': 'Uurainen', '893': 'Uusikaarlepyy', '895': 'Uusikaupunki', '905': 'Vaasa',
+ '908': 'Valkeakoski', '911': 'Valtimo', '915': 'Varkaus', '918': 'Vehmaa', '921': 'Vesanto',
+ '922': 'Vesilahti', '924': 'Veteli', '925': 'Vierema', '927': 'Vihti', '931': 'Viitasaari',
+ '934': 'Vimpeli', '935': 'Virolahti', '936': 'Virrat', '941': 'Vardo', '946': 'Voyri',
+ '976': 'Ylitornio', '977': 'Ylivieska', '980': 'Ylojarvi', '981': 'Ypaja', '989': 'Ahtari',
+ '992': 'Aanekoski'
+ };
+ var settings = await loadJSON('settings', {
+ apiKey: '',
+ poiVisibility: defaultPoiVisibility,
+ radarVisible: true,
+ tileCache: defaultTileCache
+ });
+ settings.poiVisibility = Object.assign({}, defaultPoiVisibility, settings.poiVisibility || {});
+ if (settings.radarVisible == null) settings.radarVisible = true;
+ settings.tileCache = Object.assign({}, defaultTileCache, settings.tileCache || {});
+ var tracks = await loadJSON('tracks', []);
+ var waypoints = await loadJSON('waypoints', []);
+
+ var currentPos = null;
+ var currentSpeedKmh = null;
+ var currentWind = null;
+ var currentWeather = null;
+ var weatherFetchInFlight = false;
+ var lastWeatherFetch = null;
+ var weatherSourceLabel = 'GPS';
+ var weatherMode = 'gps';
+ var following = true;
+ var recording = false;
+ var recordStart = null;
+ var recordPoints = [];
+ var recordTimerHandle = null;
+ var firstFix = true;
+ var activeTrackLine = null;
+ var modalTarget = null;
+ var markPlacementMode = false;
+ var placeSearchMarker = null;
+
+ apiKeyInput.value = settings.apiKey || '';
+ radarToggle.checked = settings.radarVisible !== false;
+ tileCacheEnabled.checked = !!settings.tileCache.enabled;
+ tileCacheMax.value = settings.tileCache.maxTiles;
+ tileCacheDays.value = settings.tileCache.ttlDays;
+
+ // ---------- map ----------
+ var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([63.5, 27.0], 5);
+
+ function mmlTileUrl() {
+ var key = settings.apiKey || 'YOUR_API_KEY';
+ return 'https://avoin-karttakuva.maanmittauslaitos.fi/avoin/wmts/1.0.0/maastokartta/default/WGS84_Pseudo-Mercator/{z}/{y}/{x}.png?api-key=' + key;
+ }
+
+ var mmlLayer = L.tileLayer(mmlTileUrl(), {
+ maxZoom: 18,
+ maxNativeZoom: 15,
+ tileSize: 256,
+ attribution: 'Maanmittauslaitos',
+ errorTileUrl: TRANSPARENT_PX
+ });
+
+ var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+ maxZoom: 19,
+ attribution: 'OpenStreetMap'
+ });
+
+ var traficomChartLayer = L.tileLayer(
+ 'https://julkinen.traficom.fi/rasteripalvelu/wmts?request=GetTile&version=1.0.0&service=WMTS&layer=Traficom:Merikarttasarjat%20public&style=default&tilematrixset=WGS84_Pseudo-Mercator&TileMatrix=WGS84_Pseudo-Mercator:{z}&TileRow={y}&TileCol={x}&format=image/png',
+ {
+ maxZoom: 18,
+ maxNativeZoom: 15,
+ tileSize: 256,
+ attribution: 'Traficom. Ei navigointikäyttöön.',
+ errorTileUrl: TRANSPARENT_PX
+ }
+ );
+
+ var sykeDepthLayer = L.tileLayer.wms('https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wms', {
+ layers: 'EL.Syvyysalue,EL.ContourLine,EL.SpotElevation',
+ styles: '',
+ format: 'image/png',
+ transparent: true,
+ version: '1.1.1',
+ opacity: 0.72,
+ maxZoom: 18,
+ attribution: 'Syke'
+ });
+
+ var rainRadarLayer = L.tileLayer.wms('https://openwms.fmi.fi/geoserver/wms', {
+ layers: 'Radar:suomi_dbz_eureffin',
+ styles: '',
+ format: 'image/png',
+ transparent: true,
+ version: '1.1.1',
+ opacity: 0.72,
+ zIndex: 450,
+ maxZoom: 18,
+ attribution: 'FMI sadetutka'
+ });
+
+ var vesijarviDepthLayer = L.geoJSON(null, {
+ coordsToLatLng: function (coords) {
+ return L.latLng(coords[0], coords[1]);
+ },
+ style: function (feature) {
+ var depth = feature.properties && feature.properties.depth;
+ var fill = depth >= 20 ? '#143f8f' : depth >= 10 ? '#1769aa' : depth >= 6 ? '#1496c8' : '#2dd4bf';
+ return {
+ color: '#d8f7ff',
+ weight: 1,
+ opacity: 0.9,
+ fillColor: fill,
+ fillOpacity: 0.24
+ };
+ },
+ onEachFeature: function (feature, layer) {
+ var depth = feature.properties && feature.properties.depth;
+ layer.bindPopup('Vesijarvi syvyysalue ' + (depth ? depth + ' m' : ''));
+ }
+ });
+
+ var poiLayers = {
+ firepit: L.layerGroup(),
+ shelter: L.layerGroup(),
+ fuel: L.layerGroup(),
+ terrace: L.layerGroup()
+ };
+ var poiLayerLabels = {
+ firepit: 'Nuotiopaikka',
+ shelter: 'Laavu',
+ fuel: 'Bensa',
+ terrace: 'Terassi'
+ };
+ var poiIcons = {
+ firepit: '🔥',
+ shelter: '⌂',
+ fuel: '⛽',
+ terrace: '☕'
+ };
+ var poiClasses = {
+ firepit: 'poi-firepit',
+ shelter: 'poi-shelter',
+ fuel: 'poi-fuel',
+ terrace: 'poi-terrace'
+ };
+ var poiOverpassEndpoints = [
+ 'https://overpass-api.de/api/interpreter',
+ 'https://lz4.overpass-api.de/api/interpreter',
+ 'https://z.overpass-api.de/api/interpreter',
+ 'https://overpass.kumi.systems/api/interpreter'
+ ];
+ var poiLoadedKey = null;
+ var poiFetchTimer = null;
+ var poiFetchSeq = 0;
+
+ (settings.apiKey ? mmlLayer : osmLayer).addTo(map);
+ sykeDepthLayer.addTo(map);
+ vesijarviDepthLayer.addTo(map);
+ if (settings.radarVisible !== false) rainRadarLayer.addTo(map);
+ Object.keys(poiLayers).forEach(function (key) {
+ if (settings.poiVisibility[key] !== false) poiLayers[key].addTo(map);
+ });
+
+ L.control.layers(
+ { 'MML Maastokartta': mmlLayer, 'OpenStreetMap': osmLayer, 'Traficom merikartta': traficomChartLayer },
+ {
+ 'SYKE syvyydet': sykeDepthLayer,
+ 'Vesijarvi syvyysalueet': vesijarviDepthLayer,
+ 'FMI sadetutka': rainRadarLayer,
+ 'Nuotiopaikat': poiLayers.firepit,
+ 'Laavut': poiLayers.shelter,
+ 'Bensa-asemat': poiLayers.fuel,
+ 'Terassit': poiLayers.terrace
+ },
+ { position: 'bottomright', collapsed: true }
+ ).addTo(map);
+ L.control.zoom({ position: 'bottomright' }).addTo(map);
+ L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
+
+ async function loadVesijarviDepthLayer() {
+ try {
+ var res = await fetch('https://biwatech.com/vj3/kohteet/bathymetries/1');
+ if (!res.ok) throw new Error('HTTP ' + res.status);
+ var source = await res.json();
+ var depths = String(source.properties && source.properties.syvyydet || '').split(/\s+/).map(function (v) { return parseFloat(v); });
+ var polygons = source.geometry && source.geometry.type === 'MultiPolygon' ? source.geometry.coordinates : [];
+ var features = polygons.map(function (polygon, index) {
+ return {
+ type: 'Feature',
+ properties: { depth: depths[index] || null },
+ geometry: { type: 'Polygon', coordinates: polygon }
+ };
+ });
+ vesijarviDepthLayer.addData({ type: 'FeatureCollection', features: features });
+ } catch (e) {
+ console.warn('Vesijarven syvyysalueiden lataus epaonnistui:', e);
+ }
+ }
+ loadVesijarviDepthLayer();
+
+ function activePoiLayerKeys() {
+ return Object.keys(poiLayers).filter(function (key) { return map.hasLayer(poiLayers[key]); });
+ }
+
+ function syncPoiToggleInputs() {
+ poiToggleInputs.forEach(function (input) {
+ var key = input.dataset.poi;
+ input.checked = settings.poiVisibility[key] !== false;
+ });
+ }
+
+ async function setPoiLayerVisible(key, visible, persist) {
+ settings.poiVisibility[key] = !!visible;
+ if (visible && !map.hasLayer(poiLayers[key])) poiLayers[key].addTo(map);
+ if (!visible && map.hasLayer(poiLayers[key])) {
+ poiLayers[key].clearLayers();
+ map.removeLayer(poiLayers[key]);
+ }
+ syncPoiToggleInputs();
+ if (persist) await saveJSON('settings', settings);
+ refreshPoiLayers();
+ }
+
+ function poiIcon(kind) {
+ return L.divIcon({
+ className: 'poi-icon',
+ html: '<div class="poi-marker ' + poiClasses[kind] + '">' + poiIcons[kind] + '</div>',
+ iconSize: [24, 24],
+ iconAnchor: [12, 12],
+ popupAnchor: [0, -12]
+ });
+ }
+
+ function poiKind(tags) {
+ if (!tags) return null;
+ if (tags.leisure === 'firepit' || tags.amenity === 'bbq') return 'firepit';
+ if (tags.tourism === 'wilderness_hut' || tags.tourism === 'picnic_site' || (tags.amenity === 'shelter' && (!tags.shelter_type || tags.shelter_type !== 'public_transport'))) return 'shelter';
+ if (tags.amenity === 'fuel' || tags.waterway === 'fuel') return 'fuel';
+ if (tags.leisure === 'outdoor_seating' || tags.amenity === 'biergarten' || tags.outdoor_seating === 'yes') return 'terrace';
+ return null;
+ }
+
+ function poiPopupHtml(kind, tags) {
+ var name = tags.name || tags['name:fi'] || poiLayerLabels[kind];
+ var html = '<strong>' + escapeHtml(name) + '</strong><br>' + escapeHtml(poiLayerLabels[kind]);
+ if (tags.operator) html += '<br>' + escapeHtml(tags.operator);
+ if (tags.opening_hours) html += '<br><span class="mono">' + escapeHtml(tags.opening_hours) + '</span>';
+ if (tags.website) html += '<br><a href="' + escapeHtml(tags.website) + '" target="_blank" rel="noopener">Verkkosivu</a>';
+ return html;
+ }
+
+ function buildPoiQuery(bounds) {
+ var s = bounds.getSouth().toFixed(5);
+ var w = bounds.getWest().toFixed(5);
+ var n = bounds.getNorth().toFixed(5);
+ var e = bounds.getEast().toFixed(5);
+ var bbox = '(' + s + ',' + w + ',' + n + ',' + e + ')';
+ return [
+ '[out:json][timeout:12];',
+ '(',
+ 'nwr' + bbox + '[leisure=firepit];',
+ 'nwr' + bbox + '[amenity=bbq];',
+ 'nwr' + bbox + '[tourism=wilderness_hut];',
+ 'nwr' + bbox + '[tourism=picnic_site][shelter];',
+ 'nwr' + bbox + '[amenity=shelter];',
+ 'nwr' + bbox + '[amenity=fuel];',
+ 'nwr' + bbox + '[waterway=fuel];',
+ 'nwr' + bbox + '[outdoor_seating=yes];',
+ 'nwr' + bbox + '[amenity=biergarten];',
+ 'nwr' + bbox + '[leisure=outdoor_seating];',
+ ');',
+ 'out center tags 180;'
+ ].join('');
+ }
+
+ function refreshPoiLayers() {
+ clearTimeout(poiFetchTimer);
+ poiFetchTimer = setTimeout(loadPoiLayers, 350);
+ }
+
+ async function fetchPoiData(bounds) {
+ var query = buildPoiQuery(bounds);
+ var lastError = null;
+ for (var i = 0; i < poiOverpassEndpoints.length; i++) {
+ var controller = window.AbortController ? new AbortController() : null;
+ var timeout = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
+ try {
+ var url = poiOverpassEndpoints[i] + '?data=' + encodeURIComponent(query);
+ var res = await fetch(url, {
+ cache: 'no-store',
+ signal: controller ? controller.signal : undefined
+ });
+ if (!res.ok) throw new Error('overpass status ' + res.status);
+ return await res.json();
+ } catch (e) {
+ lastError = e;
+ } finally {
+ if (timeout) clearTimeout(timeout);
+ }
+ }
+ throw lastError || new Error('overpass unavailable');
+ }
+
+ async function loadPoiLayers() {
+ var activeKeys = activePoiLayerKeys();
+ if (!activeKeys.length) return;
+ if (map.getZoom() < 10) {
+ activeKeys.forEach(function (key) { poiLayers[key].clearLayers(); });
+ poiLoadedKey = null;
+ return;
+ }
+ var bounds = map.getBounds().pad(0.12);
+ var latSpan = Math.abs(bounds.getNorth() - bounds.getSouth());
+ var lonSpan = Math.abs(bounds.getEast() - bounds.getWest());
+ if (latSpan > 1.2 || lonSpan > 1.6) return;
+ var cacheKey = activeKeys.join(',') + ':' + map.getZoom() + ':' +
+ bounds.getSouth().toFixed(2) + ',' + bounds.getWest().toFixed(2) + ',' +
+ bounds.getNorth().toFixed(2) + ',' + bounds.getEast().toFixed(2);
+ if (cacheKey === poiLoadedKey) return;
+ poiLoadedKey = cacheKey;
+ var fetchSeq = ++poiFetchSeq;
+ try {
+ var data = await fetchPoiData(bounds);
+ if (fetchSeq !== poiFetchSeq) return;
+ Object.keys(poiLayers).forEach(function (key) { poiLayers[key].clearLayers(); });
+ (data.elements || []).forEach(function (el) {
+ var lat = el.lat || (el.center && el.center.lat);
+ var lon = el.lon || (el.center && el.center.lon);
+ var kind = poiKind(el.tags);
+ if (!lat || !lon || !kind || !map.hasLayer(poiLayers[kind])) return;
+ L.marker([lat, lon], { icon: poiIcon(kind) })
+ .bindPopup(poiPopupHtml(kind, el.tags || {}))
+ .addTo(poiLayers[kind]);
+ });
+ } catch (e) {
+ if (e.name !== 'AbortError') console.warn('OSM-kohteiden lataus epaonnistui:', e);
+ }
+ }
+
+ poiToggleInputs.forEach(function (input) {
+ input.addEventListener('change', function () {
+ setPoiLayerVisible(input.dataset.poi, input.checked, true);
+ });
+ });
+ syncPoiToggleInputs();
+
+ map.on('moveend zoomend', refreshPoiLayers);
+ map.on('overlayadd overlayremove', function (e) {
+ Object.keys(poiLayers).forEach(function (key) {
+ if (e.layer !== poiLayers[key]) return;
+ settings.poiVisibility[key] = e.type === 'overlayadd';
+ syncPoiToggleInputs();
+ saveJSON('settings', settings);
+ });
+ refreshPoiLayers();
+ });
+ refreshPoiLayers();
+
+ function syncRadarToggle() {
+ radarToggle.checked = settings.radarVisible !== false;
+ }
+
+ async function setRainRadarVisible(visible, persist) {
+ settings.radarVisible = !!visible;
+ if (visible && !map.hasLayer(rainRadarLayer)) rainRadarLayer.addTo(map);
+ if (!visible && map.hasLayer(rainRadarLayer)) map.removeLayer(rainRadarLayer);
+ syncRadarToggle();
+ if (persist) await saveJSON('settings', settings);
+ }
+
+ // ---------- position tracking ----------
+ var posMarker = null;
+ var accuracyCircle = null;
+
+ function updateHud() {
+ if (currentPos) {
+ hudCoords.textContent = currentPos.lat.toFixed(5) + ', ' + currentPos.lon.toFixed(5) + ' +/-' + Math.round(currentPos.accuracy) + 'm';
+ }
+ if (currentWind) {
+ var windToDeg = (currentWind.direction + 180) % 360;
+ hudWindArrow.style.setProperty('--wind-rotation', windToDeg + 'deg');
+ hudWindArrow.style.opacity = '1';
+ hudWindSpeed.textContent = currentWind.speed.toFixed(1) + ' m/s';
+ hudWind.title = 'Tuuli ' + currentWind.dirLabel + ', ' + currentWind.speed.toFixed(1) + ' m/s';
+ } else {
+ hudWindArrow.style.opacity = '0.35';
+ hudWindSpeed.textContent = '-- m/s';
+ hudWind.title = 'Tuulitietoa haetaan';
+ }
+ if (currentWeather) {
+ hudWeather.textContent = currentWeather.icon + ' ' + currentWeather.temperature.toFixed(1) + ' C';
+ hudWeather.title = 'Sää (' + weatherSourceLabel + ') ' + currentWeather.label + ', ' + currentWeather.temperature.toFixed(1) + ' C';
+ } else {
+ hudWeather.textContent = '-- C';
+ hudWeather.title = 'Säätietoa haetaan';
+ }
+ hudSpeed.textContent = formatSpeed(currentSpeedKmh);
+ }
+
+ function windDirectionLabel(deg) {
+ var dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+ return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+ }
+
+ function weatherLabel(code) {
+ if (code === 0) return 'Aurinko';
+ if (code >= 1 && code <= 3) return 'Pilviä';
+ if (code === 45 || code === 48) return 'Sumua';
+ if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return 'Sadetta';
+ if ((code >= 71 && code <= 77) || code === 85 || code === 86) return 'Lunta';
+ if (code >= 95) return 'Ukkosta';
+ return 'Sää';
+ }
+
+ function weatherIcon(code) {
+ if (code === 0) return '☀️';
+ if (code >= 1 && code <= 2) return '🌤️';
+ if (code === 3) return '☁️';
+ if (code === 45 || code === 48) return '🌫️';
+ if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) return '🌧️';
+ if ((code >= 71 && code <= 77) || code === 85 || code === 86) return '❄️';
+ if (code >= 95) return '⛈️';
+ return '🌡️';
+ }
+
+ function shouldFetchWeather(lat, lon) {
+ if (!lastWeatherFetch) return true;
+ if (Date.now() - lastWeatherFetch.t > 10 * 60 * 1000) return true;
+ return haversine(lastWeatherFetch.lat, lastWeatherFetch.lon, lat, lon) > 3000;
+ }
+
+ async function fetchWeather(lat, lon, sourceLabel, force) {
+ if (weatherFetchInFlight || (!force && !shouldFetchWeather(lat, lon))) return;
+ weatherFetchInFlight = true;
+ try {
+ var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat.toFixed(4)) +
+ '&longitude=' + encodeURIComponent(lon.toFixed(4)) +
+ '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&temperature_unit=celsius';
+ var res = await fetch(url, { cache: 'no-store' });
+ if (!res.ok) throw new Error('weather status ' + res.status);
+ var data = await res.json();
+ var speed = Number(data.current && data.current.wind_speed_10m);
+ var direction = Number(data.current && data.current.wind_direction_10m);
+ var temperature = Number(data.current && data.current.temperature_2m);
+ var weatherCode = Number(data.current && data.current.weather_code);
+ if (!isNaN(speed) && !isNaN(direction) && !isNaN(temperature) && !isNaN(weatherCode)) {
+ currentWind = { speed: speed, direction: direction, dirLabel: windDirectionLabel(direction) };
+ currentWeather = { temperature: temperature, code: weatherCode, label: weatherLabel(weatherCode), icon: weatherIcon(weatherCode) };
+ weatherSourceLabel = sourceLabel || 'Kartta';
+ lastWeatherFetch = { lat: lat, lon: lon, t: Date.now(), source: weatherSourceLabel };
+ updateHud();
+ }
+ } catch (e) {
+ console.error('Säätiedon haku epäonnistui:', e);
+ } finally {
+ weatherFetchInFlight = false;
+ }
+ }
+
+ function onPosition(pos) {
+ var latitude = pos.coords.latitude;
+ var longitude = pos.coords.longitude;
+ var accuracy = pos.coords.accuracy;
+ var now = Date.now();
+ var previousPos = currentPos;
+ currentSpeedKmh = gpsSpeedKmh(pos, previousPos, now);
+ currentPos = { lat: latitude, lon: longitude, accuracy: accuracy, t: now };
+ updateHud();
+ if (weatherMode === 'gps') fetchWeather(latitude, longitude, 'GPS');
+
+ if (!posMarker) {
+ posMarker = L.circleMarker([latitude, longitude], {
+ radius: 7, color: '#05141c', weight: 2, fillColor: '#e8a13c', fillOpacity: 1
+ }).addTo(map);
+ } else {
+ posMarker.setLatLng([latitude, longitude]);
+ }
+
+ if (accuracyCircle) map.removeLayer(accuracyCircle);
+ accuracyCircle = L.circle([latitude, longitude], {
+ radius: accuracy, color: '#e8a13c', weight: 1, fillOpacity: 0.06
+ }).addTo(map);
+
+ if (firstFix) {
+ map.setView([latitude, longitude], 14);
+ firstFix = false;} else if (following) {
+ map.panTo([latitude, longitude]);
+ }
+
+ if (recording) addTrackPoint(latitude, longitude);
+ }
+
+ function onPositionError(err) {
+ hudCoords.textContent = 'GPS ei käytettävissä (' + err.message + ')';
+ }
+
+ function stopFollowingForMapTarget() {
+ following = false;
+ firstFix = false;
+ weatherMode = 'map';
+ btnFollow.classList.remove('active');
+ }
+
+ if ('geolocation' in navigator) {
+ navigator.geolocation.watchPosition(onPosition, onPositionError, {
+ enableHighAccuracy: true, maximumAge: 2000, timeout: 15000
+ });
+ } else {
+ hudCoords.textContent = 'Selain ei tue paikannusta';
+ }
+
+ map.on('dragstart', function () {
+ stopFollowingForMapTarget();
+ });
+ map.on('moveend', function () {
+ if (weatherMode !== 'map') return;
+ var center = map.getCenter();
+ fetchWeather(center.lat, center.lng, 'Kartta');
+ });
+
+ // ---------- follow toggle ----------
+ btnFollow.addEventListener('click', function () {
+ following = !following;
+ btnFollow.classList.toggle('active', following);
+ if (following && currentPos) {
+ weatherMode = 'gps';
+ map.panTo([currentPos.lat, currentPos.lon]);
+ fetchWeather(currentPos.lat, currentPos.lon, 'GPS', true);
+ } else if (!following) {
+ weatherMode = 'map';
+ var center = map.getCenter();
+ fetchWeather(center.lat, center.lng, 'Kartta', true);
+ }
+ });
+
+ // ---------- track recording ----------
+ function addTrackPoint(lat, lon) {
+ var now = Date.now();
+ var last = recordPoints[recordPoints.length - 1];
+ if (last) {
+ var dist = haversine(last.lat, last.lon, lat, lon);
+ var dt = (now - last.t) / 1000;
+ if (dist < 5 && dt < 5) return;
+ }
+ recordPoints.push({ lat: lat, lon: lon, t: now, speedKmh: currentSpeedKmh });
+ activeTrackLine.addLatLng([lat, lon]);
+ if (recordPoints.length % 10 === 0) checkpointActiveTrack();
+ }
+
+ async function checkpointActiveTrack() {
+ if (!recording) return;
+ await saveJSON('active_track', { start: recordStart, points: recordPoints });
+ }
+
+ function updateRecTimer() {
+ var elapsed = Math.floor((Date.now() - recordStart) / 1000);
+ var m = String(Math.floor(elapsed / 60));
+ var s = String(elapsed % 60);
+ if (m.length < 2) m = '0' + m;
+ if (s.length < 2) s = '0' + s;
+ recTime.textContent = m + ':' + s;
+ }
+
+ async function stopRecordingAndSave() {
+ recording = false;
+ clearInterval(recordTimerHandle);
+ recIndicator.classList.add('hidden');
+ btnRecord.classList.remove('active');
+ if (activeTrackLine) { map.removeLayer(activeTrackLine); activeTrackLine = null; }
+ if (recordPoints.length > 1) {
+ var track = {
+ id: 'trk_' + recordStart,
+ name: 'Reitti ' + new Date(recordStart).toLocaleString('fi-FI'),
+ start: recordStart,
+ end: Date.now(),
+ points: recordPoints
+ };
+ tracks.push(track);
+ await saveJSON('tracks', tracks);
+ renderTrackList();
+ }
+ await deleteKey('active_track');
+ recordPoints = [];
+ }
+
+ btnRecord.addEventListener('click', async function () {
+ if (!recording) {
+ recording = true;
+ recordStart = Date.now();
+ recordPoints = [];
+ if (currentPos) recordPoints.push({ lat: currentPos.lat, lon: currentPos.lon, t: recordStart, speedKmh: currentSpeedKmh });
+ activeTrackLine = L.polyline(recordPoints.map(function (p) { return [p.lat, p.lon]; }), { color: '#e8a13c', weight: 3 }).addTo(map);
+ recIndicator.classList.remove('hidden');
+ updateRecTimer();
+ recordTimerHandle = setInterval(updateRecTimer, 1000);
+ btnRecord.classList.add('active');
+ } else {
+ await stopRecordingAndSave();
+ }
+ });
+
+ // ---------- waypoints ----------
+ function waypointIcon() {
+ return L.divIcon({ className: 'wp-icon', html: '<div class="wp-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+ }
+
+ function popupHtml(wp) {
+ var html = '<strong>' + escapeHtml(wp.name) + '</strong><br>';
+ if (wp.speedKmh != null) html += escapeHtml(Number(wp.speedKmh).toFixed(1)) + ' km/h<br>';
+ if (wp.note) html += escapeHtml(wp.note) + '<br>';
+ html += '<span style="color:#6f8e99;font-size:11px">' + new Date(wp.t).toLocaleString('fi-FI') + '</span>';
+ return html;
+ }
+
+ function addWaypointMarker(wp) {
+ var m = L.marker([wp.lat, wp.lon], { icon: waypointIcon() }).addTo(map);
+ m.bindPopup(popupHtml(wp));
+ wp._marker = m;
+ }
+
+ function setMarkPlacementMode(enabled) {
+ markPlacementMode = enabled;
+ btnMark.classList.toggle('active', enabled);
+ markLabel.textContent = enabled ? 'Valitse' : 'Merkitse';
+ btnMark.title = enabled ? 'Napauta kalapaikka kartalta' : 'Merkitse kalapaikka';
+ map.getContainer().classList.toggle('mark-pick-mode', enabled);
+ }
+
+ function openMarkerModal(lat, lon) {
+ modalTarget = { lat: lat, lon: lon };
+ wpName.value = '';
+ wpNote.value = '';
+ wpSpeed.value = currentSpeedKmh != null && isFinite(currentSpeedKmh) ? currentSpeedKmh.toFixed(1) : '';
+ markerModal.classList.remove('hidden');
+ wpName.focus();
+ }
+
+ btnMark.addEventListener('click', function () {
+ setMarkPlacementMode(!markPlacementMode);
+ });
+
+ wpCancel.addEventListener('click', function () { markerModal.classList.add('hidden'); });
+
+ wpSave.addEventListener('click', async function () {
+ var wp = {
+ id: 'wp_' + Date.now(),
+ name: wpName.value.trim() || 'Kalapaikka',
+ note: wpNote.value.trim(),
+ speedKmh: wpSpeed.value !== '' ? parseFloat(wpSpeed.value) : null,
+ lat: modalTarget.lat,
+ lon: modalTarget.lon,
+ t: Date.now()
+ };
+ waypoints.push(wp);
+ await saveJSON('waypoints', waypoints);
+ addWaypointMarker(wp);
+ renderWaypointList();
+ markerModal.classList.add('hidden');
+ });
+
+ // long-press on map to mark an arbitrary point (not just current GPS fix)
+ var longPressTimer = null;
+ map.on('mousedown', function (e) {
+ if (markPlacementMode) return;
+ longPressTimer = setTimeout(function () { openMarkerModal(e.latlng.lat, e.latlng.lng); }, 600);
+ });
+ map.on('mouseup dragstart zoomstart', function () { clearTimeout(longPressTimer); });
+ map.on('click', function (e) {
+ if (!markPlacementMode) return;
+ setMarkPlacementMode(false);
+ openMarkerModal(e.latlng.lat, e.latlng.lng);
+ });
+
+ // ---------- settings/data panel ----------
+ btnPanel.addEventListener('click', function () {
+ apiKeyInput.value = settings.apiKey || '';
+ panel.classList.remove('hidden');
+ });
+ btnSearch.addEventListener('click', function () {
+ apiKeyInput.value = settings.apiKey || '';
+ panel.classList.remove('hidden');
+ requestAnimationFrame(function () {
+ placeSearchSection.scrollIntoView({ block: 'start' });
+ placeSearchInput.focus();
+ });
+ });
+ panelClose.addEventListener('click', function () { panel.classList.add('hidden'); });
+
+ apiKeySave.addEventListener('click', async function () {
+ settings.apiKey = apiKeyInput.value.trim();
+ await saveJSON('settings', settings);
+ mmlLayer.setUrl(mmlTileUrl());
+ if (settings.apiKey && !map.hasLayer(mmlLayer)) {
+ map.removeLayer(osmLayer);
+ mmlLayer.addTo(map);
+ }
+ });
+
+ radarToggle.addEventListener('change', function () {
+ setRainRadarVisible(radarToggle.checked, true);
+ });
+
+ map.on('overlayadd overlayremove', function (e) {
+ if (e.layer !== rainRadarLayer) return;
+ settings.radarVisible = e.type === 'overlayadd';
+ syncRadarToggle();
+ saveJSON('settings', settings);
+ });
+
+ function firstCoordinate(geometry) {
+ if (!geometry || !geometry.coordinates) return null;
+ var coords = geometry.coordinates;
+ while (Array.isArray(coords[0])) coords = coords[0];
+ return coords && coords.length >= 2 ? { lon: Number(coords[0]), lat: Number(coords[1]) } : null;
+ }
+
+ function placeName(props) {
+ return props.spelling || props.name || props.label || props.placeName || props.name_fi || 'Paikannimi';
+ }
+
+ function firstProp(props, names) {
+ for (var i = 0; i < names.length; i += 1) {
+ var value = props[names[i]];
+ if (value == null || value === '') continue;
+ return Array.isArray(value) ? value[0] : value;
+ }
+ return '';
+ }
+
+ function municipalityName(props) {
+ var label = firstProp(props, [
+ 'municipalityName', 'municipality_name', 'municipalityFi', 'municipality_fi',
+ 'municipalityText', 'kuntaNimi', 'kuntanimi', 'KUNTANIMI', 'KUNTANIMIFI'
+ ]);
+ if (label && !/^\d+$/.test(String(label))) return String(label);
+ var code = firstProp(props, [
+ 'municipality', 'municipalityCode', 'municipality_code', 'kunta', 'kuntaKoodi',
+ 'KUNTA', 'KUNTANRO'
+ ]);
+ if (!code) return '';
+ var key = String(code).trim().replace(/^0+/, '');
+ return municipalityNames[key] || String(code);
+ }
+
+ function placeSubtext(props) {
+ var parts = [];
+ var type = firstProp(props, ['placeType', 'place_type', 'placeTypeName', 'place_type_name']);
+ var municipality = municipalityName(props);
+ if (type) parts.push(type);
+ if (municipality) parts.push(municipality);
+ return parts.join(' / ');
+ }
+
+ function renderPlaceResults(features) {
+ placeResultsEl.innerHTML = '';
+ if (!features.length) {
+ placeSearchStatus.textContent = 'Ei osumia.';
+ return;
+ }
+ placeSearchStatus.textContent = features.length + ' osumaa.';
+ features.forEach(function (feature) {
+ var props = feature.properties || {};
+ var coord = firstCoordinate(feature.geometry);
+ if (!coord || isNaN(coord.lat) || isNaN(coord.lon)) return;
+ var li = document.createElement('li');
+ var btn = document.createElement('button');
+ btn.className = 'place-result';
+ btn.type = 'button';
+ btn.innerHTML = escapeHtml(placeName(props)) + '<span class="place-result-sub">' + escapeHtml(placeSubtext(props) || (coord.lat.toFixed(5) + ', ' + coord.lon.toFixed(5))) + '</span>';
+ btn.addEventListener('click', function () {
+ var subtext = placeSubtext(props);
+ stopFollowingForMapTarget();
+ if (placeSearchMarker) map.removeLayer(placeSearchMarker);
+ placeSearchMarker = L.marker([coord.lat, coord.lon]).addTo(map).bindPopup('<strong>' + escapeHtml(placeName(props)) + '</strong>' + (subtext ? '<br><span>' + escapeHtml(subtext) + '</span>' : '')).openPopup();
+ map.setView([coord.lat, coord.lon], 14);
+ panel.classList.add('hidden');
+ });
+ li.appendChild(btn);
+ placeResultsEl.appendChild(li);
+ });
+ }
+
+ async function searchPlacenames() {
+ var query = placeSearchInput.value.trim();
+ if (query.length < 2) {
+ placeSearchStatus.textContent = 'Kirjoita vähintään 2 merkkiä.';
+ return;
+ }
+ if (!settings.apiKey) {
+ placeSearchStatus.textContent = 'MML API-avain tarvitaan paikannimihakuun.';
+ return;
+ }
+ placeSearchStatus.textContent = 'Haetaan...';
+ placeResultsEl.innerHTML = '';
+ try {
+ var url = 'https://avoin-paikkatieto.maanmittauslaitos.fi/geographic-names/features/v1/collections/placenames/items' +
+ '?limit=12&spelling_case_insensitive=' + encodeURIComponent(query + '*') +
+ '&api-key=' + encodeURIComponent(settings.apiKey);
+ var res = await fetch(url, { cache: 'no-store' });
+ if (!res.ok) throw new Error('MML haku ' + res.status);
+ var data = await res.json();
+ renderPlaceResults(data.features || []);
+ } catch (e) {
+ console.error('Paikannimihaun virhe:', e);
+ placeSearchStatus.textContent = 'Haku epäonnistui. Tarkista MML API-avain.';
+ }
+ }
+
+ placeSearchBtn.addEventListener('click', searchPlacenames);
+ placeSearchInput.addEventListener('keydown', function (e) {
+ if (e.key === 'Enter') searchPlacenames();
+ });
+
+ function serviceWorkerTarget(reg) {
+ return navigator.serviceWorker.controller || reg.active || reg.waiting || reg.installing;
+ }
+
+ async function postServiceWorkerMessage(message) {
+ if (!('serviceWorker' in navigator)) throw new Error('service worker unsupported');
+ var reg = await navigator.serviceWorker.register('map-sw.js');
+ var target = serviceWorkerTarget(reg);
+ if (!target) throw new Error('service worker not ready');
+ return await new Promise(function (resolve, reject) {
+ var channel = new MessageChannel();
+ var timer = setTimeout(function () { reject(new Error('service worker timeout')); }, 4000);
+ channel.port1.onmessage = function (event) {
+ clearTimeout(timer);
+ resolve(event.data || {});
+ };
+ target.postMessage(message, [channel.port2]);
+ });
+ }
+
+ async function updateTileCacheStatus() {
+ if (!('serviceWorker' in navigator)) {
+ tileCacheStatus.textContent = 'Selain ei tue service worker -cachea.';
+ return;
+ }
+ try {
+ var res = await postServiceWorkerMessage({ type: 'GET_TILE_CACHE_STATUS' });
+ var count = res.count || 0;
+ tileCacheStatus.textContent = 'Cachessa ' + count + ' tileä. Raja ' + settings.tileCache.maxTiles + ' / ' + settings.tileCache.ttlDays + ' pv.';
+ } catch (e) {
+ tileCacheStatus.textContent = 'Cache aktivoituu sivun seuraavalla latauksella.';
+ }
+ }
+
+ async function applyTileCacheSettings() {
+ settings.tileCache = {
+ enabled: !!tileCacheEnabled.checked,
+ maxTiles: Math.max(100, Math.min(5000, parseInt(tileCacheMax.value, 10) || 1200)),
+ ttlDays: Math.max(1, Math.min(30, parseInt(tileCacheDays.value, 10) || 7))
+ };
+ tileCacheMax.value = settings.tileCache.maxTiles;
+ tileCacheDays.value = settings.tileCache.ttlDays;
+ await saveJSON('settings', settings);
+ try {
+ await postServiceWorkerMessage({ type: 'SET_TILE_CACHE_CONFIG', config: settings.tileCache });
+ tileCacheStatus.textContent = settings.tileCache.enabled ? 'Cache käytössä katsotuille tileille.' : 'Cache pois käytöstä.';
+ await updateTileCacheStatus();
+ } catch (e) {
+ tileCacheStatus.textContent = 'Cache aktivoituu sivun seuraavalla latauksella.';
+ }
+ }
+
+ tileCacheApply.addEventListener('click', applyTileCacheSettings);
+ tileCacheClear.addEventListener('click', async function () {
+ try {
+ await postServiceWorkerMessage({ type: 'CLEAR_TILE_CACHE' });
+ tileCacheStatus.textContent = 'Tile-cache tyhjennetty.';
+ await updateTileCacheStatus();
+ } catch (e) {
+ tileCacheStatus.textContent = 'Tyhjennys epäonnistui.';
+ }
+ });
+ applyTileCacheSettings();
+
+ // ---------- track list ----------
+ function renderTrackList() {
+ trackListEl.innerHTML = '';
+ trackEmpty.classList.toggle('hidden', tracks.length > 0);
+ tracks.forEach(function (trk) {
+ var durMin = Math.max(1, Math.round((trk.end - trk.start) / 60000));
+ var li = document.createElement('li');
+ li.className = 'list-item';
+ li.innerHTML =
+ '<div class="list-item-main">' +
+ '<label class="track-toggle-label">' +
+ '<input type="checkbox" class="track-toggle" data-id="' + trk.id + '" checked>' +
+ '<span class="list-item-title">' + escapeHtml(trk.name) + '</span>' +
+ '</label>' +
+ '<div class="list-item-sub">' + trk.points.length + ' pistettä, ' + durMin + ' min</div>' +
+ '</div>' +
+ '<div class="list-item-actions">' +
+ '<button class="trk-del" data-id="' + trk.id + '">Poista</button>' +
+ '</div>';
+ trackListEl.appendChild(li);
+
+ if (!trk._line) {
+ trk._line = L.polyline(trk.points.map(function (p) { return [p.lat, p.lon]; }), { color: '#5fa8c9', weight: 2, opacity: 0.85 });
+ }
+ trk._line.addTo(map);
+ });
+ }
+
+ trackListEl.addEventListener('change', function (e) {
+ if (!e.target.classList.contains('track-toggle')) return;
+ var trk = tracks.find(function (t) { return t.id === e.target.dataset.id; });
+ if (!trk) return;
+ if (e.target.checked) trk._line.addTo(map); else map.removeLayer(trk._line);
+ });
+
+ trackListEl.addEventListener('click', async function (e) {
+ if (!e.target.classList.contains('trk-del')) return;
+ var id = e.target.dataset.id;
+ var trk = tracks.find(function (t) { return t.id === id; });
+ if (trk && trk._line) map.removeLayer(trk._line);
+ tracks = tracks.filter(function (t) { return t.id !== id; });
+ await saveJSON('tracks', tracks);
+ renderTrackList();
+ });
+
+ // ---------- waypoint list ----------
+ function renderWaypointList() {
+ waypointListEl.innerHTML = '';
+ waypointEmpty.classList.toggle('hidden', waypoints.length > 0);
+ waypoints.forEach(function (wp) {
+ var li = document.createElement('li');
+ li.className = 'list-item';
+ var sub = (wp.speedKmh != null ? Number(wp.speedKmh).toFixed(1) + ' km/h, ' : '') + new Date(wp.t).toLocaleString('fi-FI');
+ li.innerHTML =
+ '<div class="list-item-main">' +
+ '<div class="list-item-title">' + escapeHtml(wp.name) + '</div>' +
+ '<div class="list-item-sub">' + sub + '</div>' +
+ '</div>' +
+ '<div class="list-item-actions">' +
+ '<button class="wp-goto" data-id="' + wp.id + '">Näytä</button>' +
+ '<button class="wp-del" data-id="' + wp.id + '">Poista</button>' +
+ '</div>';
+ waypointListEl.appendChild(li);
+ });
+ }
+
+ waypointListEl.addEventListener('click', async function (e) {
+ var id = e.target.dataset.id;
+ if (!id) return;
+ var wp = waypoints.find(function (w) { return w.id === id; });
+ if (!wp) return;
+ if (e.target.classList.contains('wp-goto')) {
+ map.setView([wp.lat, wp.lon], 15);
+ panel.classList.add('hidden');
+ if (wp._marker) wp._marker.openPopup();
+ } else if (e.target.classList.contains('wp-del')) {
+ if (wp._marker) map.removeLayer(wp._marker);
+ waypoints = waypoints.filter(function (w) { return w.id !== id; });
+ await saveJSON('waypoints', waypoints);
+ renderWaypointList();
+ }
+ });
+
+ // ---------- GeoJSON export ----------
+ exportBtn.addEventListener('click', function () {
+ var features = [];
+ waypoints.forEach(function (wp) {
+ features.push({
+ type: 'Feature',
+ geometry: { type: 'Point', coordinates: [wp.lon, wp.lat] },
+ properties: { name: wp.name, note: wp.note, speedKmh: wp.speedKmh, time: new Date(wp.t).toISOString(), kind: 'waypoint' }
+ });
+ });
+ tracks.forEach(function (trk) {
+ features.push({
+ type: 'Feature',
+ geometry: { type: 'LineString', coordinates: trk.points.map(function (p) { return [p.lon, p.lat]; }) },
+ properties: {
+ name: trk.name,
+ start: new Date(trk.start).toISOString(),
+ end: new Date(trk.end).toISOString(),
+ speedsKmh: trk.points.map(function (p) { return p.speedKmh; }),
+ kind: 'track'
+ }
+ });
+ });
+ var fc = { type: 'FeatureCollection', features: features };
+ var blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' });
+ var url = URL.createObjectURL(blob);
+ var a = document.createElement('a');
+ a.href = url;
+ a.download = 'kalastusplotteri-' + new Date().toISOString().slice(0, 10) + '.geojson';
+ document.body.appendChild(a);
+ a.click();
+ a.remove();
+ URL.revokeObjectURL(url);
+ });
+
+ // ---------- init render + crash recovery ----------
+ waypoints.forEach(addWaypointMarker);
+ renderWaypointList();
+ renderTrackList();
+
+ var activeTrack = await loadJSON('active_track', null);
+ if (activeTrack && activeTrack.points && activeTrack.points.length > 1) {
+ var restore = confirm('Löytyi keskeneräiseksi jäänyt reitti (' + activeTrack.points.length + ' pistettä). Tallennetaanko se?');
+ if (restore) {
+ tracks.push({
+ id: 'trk_' + activeTrack.start,
+ name: 'Reitti ' + new Date(activeTrack.start).toLocaleString('fi-FI') + ' (palautettu)',
+ start: activeTrack.start,
+ end: Date.now(),
+ points: activeTrack.points
+ });
+ await saveJSON('tracks', tracks);
+ renderTrackList();
+ }
+ await deleteKey('active_track');
+ }
+
+ if (waypoints.length) {
+ var lastWp = waypoints[waypoints.length - 1];
+ map.setView([lastWp.lat, lastWp.lon], 13);
+ firstFix = false;
+ } else if (tracks.length) {
+ var lastTrk = tracks[tracks.length - 1];
+ var lastPt = lastTrk.points[lastTrk.points.length - 1];
+ map.setView([lastPt.lat, lastPt.lon], 13);
+ firstFix = false;
+ }
+
+ updateHud();
+})();
+</script>
+</body>
+</html>
