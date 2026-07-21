@@ -27,6 +27,7 @@ Tuotanto: https://lith.fi/app/map/
 - Olosuhteet tänään (HUD-merkki): ilmanpaineen 3 h trendi (Open-Meteo) + kuunkierto ja parhaat ajat (SunCalc). Ei riipu sijainnista kartalla.
 - Syvyystiilet (6 km) cachetetaan IndexedDB:hen: TTL 30 pv, enintään 150 tiiltä / 12 Mt, LRU-siivous. Paneelissa tila ja tyhjennys.
 - 3D-näkymä rakennetaan samasta syvyysruudukosta; three.js ladataan cdnjs:stä vasta näkymää avattaessa.
+- 3D-näkymän Seuraa-tila: kamera seuraa venettä GPS-sijainnin ja suunnan mukaan ja näyttää pohjan muodot ajosuuntaan; syvyys veneen alla otsikkorivillä. Analyysialue rakennetaan lennossa uudelleen veneen ympärille kun ajetaan reunalle. Raahaus vaihtaa vapaaseen kameraan.
 
 ## Datalähteet
 

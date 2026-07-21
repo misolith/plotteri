@@ -594,6 +594,15 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  return 2 * R * Math.asin(Math.sqrt(a));
  }
 
+ function bearingDeg(lat1, lon1, lat2, lon2) {
+ function toRad(d) { return (d * Math.PI) / 180; }
+ var dLon = toRad(lon2 - lon1);
+ var y = Math.sin(dLon) * Math.cos(toRad(lat2));
+ var x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+ Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+ return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+ }
+
  function formatSpeed(speedKmh) {
  return speedKmh != null && isFinite(speedKmh) ? speedKmh.toFixed(1) + ' km/h' : '-- km/h';
  }
@@ -1668,6 +1677,27 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  }
  }
 
+ async function buildAnalysisForBounds(bounds) {
+ var keys = depthTileKeysForBounds(bounds);
+ if (keys.length > DEPTH_MAX_TILES_PER_VIEW) return null;
+ var tiles = await ensureDepthTiles(keys);
+ var contourById = new Map();
+ var bandById = new Map();
+ tiles.forEach(function (tile) {
+ (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
+ (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
+ });
+ return buildAnalysis({
+ contours: Array.from(contourById.values()),
+ bands: Array.from(bandById.values()),
+ wind: currentWind,
+ west: bounds.getWest(),
+ south: bounds.getSouth(),
+ east: bounds.getEast(),
+ north: bounds.getNorth()
+ });
+ }
+
  async function runDepthWork(force) {
  clearTimeout(depthWorkTimer);
  if (!map.hasLayer(fishIndexLayer) && !force) return null;
@@ -1684,23 +1714,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  }
  var seq = ++depthBuildSeq;
  setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)…');
- var tiles = await ensureDepthTiles(keys);
- if (seq !== depthBuildSeq) return null;
- var contourById = new Map();
- var bandById = new Map();
- tiles.forEach(function (tile) {
- (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
- (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
- });
- var a = buildAnalysis({
- contours: Array.from(contourById.values()),
- bands: Array.from(bandById.values()),
- wind: currentWind,
- west: bounds.getWest(),
- south: bounds.getSouth(),
- east: bounds.getEast(),
- north: bounds.getNorth()
- });
+ var a = await buildAnalysisForBounds(bounds);
  if (seq !== depthBuildSeq) return null;
  lastAnalysis = a;
  if (!a || !a.hasData) {
@@ -1730,8 +1744,34 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
 
  // ---------- 3D-nakyma (lazy) ----------
  var view3dLoading = false;
+ var view3dHandle = null;
+ var boatHeading = null;
+ var rebuild3dInFlight = false;
+
+ async function rebuild3dAround(lat, lon) {
+ if (rebuild3dInFlight || !view3dHandle || !lastAnalysis) return;
+ rebuild3dInFlight = true;
+ try {
+ var dLat = lastAnalysis.north - lastAnalysis.south;
+ var dLon = lastAnalysis.east - lastAnalysis.west;
+ var bounds = L.latLngBounds(
+ [lat - dLat / 2, lon - dLon / 2],
+ [lat + dLat / 2, lon + dLon / 2]
+ );
+ var a = await buildAnalysisForBounds(bounds);
+ if (a && a.hasData && view3dHandle) {
+ lastAnalysis = a;
+ view3dHandle.setAnalysis(a);
+ }
+ } catch (e) {
+ console.warn('3D-alueen uudelleenrakennus epäonnistui:', e);
+ } finally {
+ rebuild3dInFlight = false;
+ }
+ }
+
  async function open3d() {
- if (view3dLoading) return;
+ if (view3dLoading || view3dHandle) return;
  if (map.getZoom() < DEPTH_MIN_ZOOM) {
  showToast('Lähennä järvelle (zoom 12+) ennen 3D-näkymää');
  return;
@@ -1746,7 +1786,12 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  }
  var mod = await import('./view3d.js');
  panel.classList.add('hidden');
- await mod.openBathy3d(a, { title: '3D-syvyysnäkymä' });
+ view3dHandle = await mod.openBathy3d(a, {
+ title: '3D-syvyysnäkymä',
+ onClose: function () { view3dHandle = null; },
+ onNearEdge: rebuild3dAround
+ });
+ if (currentPos) view3dHandle.updateBoat(currentPos.lat, currentPos.lon, boatHeading);
  } catch (e) {
  console.error('3D-näkymän avaus epäonnistui:', e);
  showToast('3D-näkymän lataus epäonnistui');
@@ -1972,6 +2017,13 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var previousPos = currentPos;
  currentSpeedKmh = gpsSpeedKmh(pos, previousPos, now);
  currentPos = { lat: latitude, lon: longitude, accuracy: accuracy, t: now };
+ var gpsHeading = Number(pos.coords.heading);
+ if (!isNaN(gpsHeading) && currentSpeedKmh != null && currentSpeedKmh > 1) {
+ boatHeading = gpsHeading;
+ } else if (previousPos && haversine(previousPos.lat, previousPos.lon, latitude, longitude) > 3) {
+ boatHeading = bearingDeg(previousPos.lat, previousPos.lon, latitude, longitude);
+ }
+ if (view3dHandle) view3dHandle.updateBoat(latitude, longitude, boatHeading);
  updateHud();
  if (weatherMode === 'gps') fetchWeather(latitude, longitude, 'GPS');
 
@@ -2555,7 +2607,8 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  fetchDayConditions: fetchDayConditions,
  open3d: open3d,
  getAnalysis: function () { return lastAnalysis; },
- getDayScore: function () { return lastDayScore; }
+ getDayScore: function () { return lastDayScore; },
+ get3d: function () { return view3dHandle; }
  };
  setTimeout(function () {
  if (!lastDayScore) {
