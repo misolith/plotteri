@@ -1,4 +1,5 @@
-const CACHE_NAME = 'kalastusplotteri-tile-cache-v1';
+const CACHE_NAME = 'kalastusplotteri-tile-cache-v2';
+const OLD_CACHE_PREFIX = 'kalastusplotteri-tile-cache-';
 const DB_NAME = 'kalastusplotteri-cache-meta';
 const DB_VERSION = 1;
 const META_STORE = 'tiles';
@@ -20,7 +21,13 @@ self.addEventListener('install', (event) => {
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil((async () => {
+    const names = await caches.keys();
+    await Promise.all(names
+      .filter((name) => name.startsWith(OLD_CACHE_PREFIX) && name !== CACHE_NAME)
+      .map((name) => caches.delete(name)));
+    await self.clients.claim();
+  })());
 });
 
 self.addEventListener('message', (event) => {
@@ -75,6 +82,7 @@ function isTileRequest(request) {
     return false;
   }
   if (!TILE_HOSTS.has(url.hostname)) return false;
+  if (url.searchParams.get('api-key') === 'YOUR_API_KEY') return false;
   if (url.hostname === 'paikkatiedot.ymparisto.fi' && !url.pathname.includes('/wms')) return false;
   return true;
 }

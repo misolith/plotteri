@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems; worker-src 'self';">
 <title>Kalastusplotteri</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <style>
@@ -513,69 +514,317 @@
  var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true };
  var defaultTileCache = { enabled: true, maxTiles: 1200, ttlDays: 7 };
  var municipalityNames = {
- '5': 'Alajarvi', '9': 'Alavieska', '10': 'Alavus', '16': 'Asikkala', '18': 'Askola',
- '19': 'Aura', '20': 'Akaa', '35': 'Brando', '43': 'Eckero', '46': 'Enonkoski',
- '47': 'Enontekio', '49': 'Espoo', '50': 'Eura', '51': 'Eurajoki', '52': 'Evijarvi',
- '60': 'Finstrom', '61': 'Forssa', '62': 'Foglo', '65': 'Geta', '69': 'Haapajarvi',
- '71': 'Haapavesi', '72': 'Hailuoto', '74': 'Halsua', '75': 'Hamina', '76': 'Hammarland',
- '77': 'Hankasalmi', '78': 'Hanko', '79': 'Harjavalta', '81': 'Hartola', '82': 'Hattula',
- '86': 'Hausjarvi', '90': 'Heinavesi', '91': 'Helsinki', '92': 'Vantaa', '97': 'Hirvensalmi',
- '98': 'Hollola', '99': 'Honkajoki', '102': 'Huittinen', '103': 'Humppila', '105': 'Hyrynsalmi',
- '106': 'Hyvinkaa', '108': 'Hameenkyro', '109': 'Hameenlinna', '111': 'Heinola', '139': 'Ii',
- '140': 'Iisalmi', '142': 'Iitti', '143': 'Ikaalinen', '145': 'Ilmajoki', '146': 'Ilomantsi',
- '148': 'Inari', '149': 'Inkoo', '151': 'Isojoki', '152': 'Isokyro', '153': 'Imatra',
- '165': 'Janakkala', '167': 'Joensuu', '169': 'Jokioinen', '170': 'Jomala', '171': 'Joroinen',
- '172': 'Joutsa', '176': 'Juuka', '177': 'Juupajoki', '178': 'Juva', '179': 'Jyvaskyla',
- '181': 'Jamijarvi', '182': 'Jamsa', '186': 'Jarvenpaa', '202': 'Kaarina', '204': 'Kaavi',
- '205': 'Kajaani', '208': 'Kalajoki', '211': 'Kangasala', '213': 'Kangasniemi', '214': 'Kankaanpaa',
- '216': 'Kannonkoski', '217': 'Kannus', '218': 'Karijoki', '224': 'Karkkila', '226': 'Karstula',
- '230': 'Karvia', '231': 'Kaskinen', '232': 'Kauhajoki', '233': 'Kauhava', '235': 'Kauniainen',
- '236': 'Kaustinen', '239': 'Keitele', '240': 'Kemi', '241': 'Keminmaa', '244': 'Kempele',
- '245': 'Kerava', '249': 'Keuruu', '250': 'Kihnio', '256': 'Kinnula', '257': 'Kirkkonummi',
- '260': 'Kitee', '261': 'Kittila', '263': 'Kiuruvesi', '265': 'Kivijarvi', '271': 'Kokemaki',
- '272': 'Kokkola', '273': 'Kolari', '275': 'Konnevesi', '276': 'Kontiolahti', '280': 'Korsnas',
- '284': 'Koski Tl', '285': 'Kotka', '286': 'Kouvola', '287': 'Kristiinankaupunki', '288': 'Kruunupyy',
- '290': 'Kuhmo', '291': 'Kuhmoinen', '295': 'Kumlinge', '297': 'Kuopio', '300': 'Kuortane',
- '301': 'Kurikka', '304': 'Kustavi', '305': 'Kuusamo', '309': 'Outokumpu', '312': 'Kyyjarvi',
- '316': 'Karkola', '317': 'Karsamaki', '318': 'Kokar', '320': 'Kemijarvi', '322': 'Kemionsaari',
- '398': 'Lahti', '399': 'Laihia', '400': 'Laitila', '402': 'Lapinlahti', '403': 'Lappajarvi',
- '405': 'Lappeenranta', '407': 'Lapinjarvi', '408': 'Lapua', '410': 'Laukaa', '416': 'Lemi',
- '417': 'Lemland', '418': 'Lempaala', '420': 'Leppavirta', '421': 'Lestijarvi', '422': 'Lieksa',
- '423': 'Lieto', '425': 'Liminka', '426': 'Liperi', '430': 'Loimaa', '433': 'Loppi',
- '434': 'Loviisa', '435': 'Luhanka', '436': 'Lumijoki', '438': 'Lumparland', '440': 'Luoto',
- '441': 'Luumaki', '444': 'Lohja', '445': 'Parainen', '475': 'Maalahti', '478': 'Maarianhamina',
- '480': 'Marttila', '481': 'Masku', '483': 'Merijarvi', '484': 'Merikarvia', '489': 'Miehikkala',
- '491': 'Mikkeli', '494': 'Muhos', '495': 'Multia', '498': 'Muonio', '499': 'Mustasaari',
- '500': 'Muurame', '503': 'Mynamaki', '504': 'Myrskyla', '505': 'Mantsala', '507': 'Mantyharju',
- '508': 'Mantta-Vilppula', '529': 'Naantali', '531': 'Nakkila', '535': 'Nivala', '536': 'Nokia',
- '538': 'Nousiainen', '541': 'Nurmes', '543': 'Nurmijarvi', '545': 'Narpio', '560': 'Orimattila',
- '561': 'Oripaa', '562': 'Orivesi', '563': 'Oulainen', '564': 'Oulu', '576': 'Padasjoki',
- '577': 'Paimio', '578': 'Paltamo', '580': 'Parikkala', '581': 'Parkano', '583': 'Pelkosenniemi',
- '584': 'Perho', '588': 'Pertunmaa', '592': 'Petajavesi', '593': 'Pieksamaki', '595': 'Pielavesi',
- '598': 'Pietarsaari', '599': 'Pedersoren kunta', '601': 'Pihtipudas', '604': 'Pirkkala', '607': 'Polvijarvi',
- '608': 'Pomarkku', '609': 'Pori', '611': 'Pornainen', '614': 'Posio', '615': 'Pudasjarvi',
- '616': 'Pukkila', '619': 'Punkalaidun', '620': 'Puolanka', '623': 'Puumala', '624': 'Pyhtaa',
- '625': 'Pyhajoki', '626': 'Pyhajarvi', '630': 'Pyhanta', '631': 'Pyharanta', '635': 'Palkane',
- '636': 'Poytya', '638': 'Porvoo', '678': 'Raahe', '680': 'Raisio', '681': 'Rantasalmi',
- '683': 'Ranua', '684': 'Rauma', '686': 'Rautalampi', '687': 'Rautavaara', '689': 'Rautjarvi',
- '691': 'Reisjarvi', '694': 'Riihimaki', '697': 'Ristijarvi', '698': 'Rovaniemi', '700': 'Ruokolahti',
- '702': 'Ruovesi', '704': 'Rusko', '707': 'Raakkyla', '710': 'Raasepori', '729': 'Saarijarvi',
- '732': 'Salla', '734': 'Salo', '736': 'Saltvik', '738': 'Sauvo', '739': 'Savitaipale',
- '740': 'Savonlinna', '742': 'Savukoski', '743': 'Seinajoki', '746': 'Sievi', '747': 'Siikainen',
- '748': 'Siikajoki', '749': 'Siilinjarvi', '751': 'Simo', '753': 'Sipoo', '755': 'Siuntio',
- '758': 'Sodankyla', '759': 'Soini', '761': 'Somero', '762': 'Sonkajarvi', '765': 'Sotkamo',
- '766': 'Sottunga', '768': 'Sulkava', '771': 'Sund', '777': 'Suomussalmi', '778': 'Suonenjoki',
- '781': 'Sysma', '783': 'Sakyla', '785': 'Vaala', '790': 'Sastamala', '791': 'Siikalatva',
- '831': 'Taipalsaari', '832': 'Taivalkoski', '833': 'Taivassalo', '834': 'Tammela', '837': 'Tampere',
- '844': 'Tervo', '845': 'Tervola', '846': 'Teuva', '848': 'Tohmajarvi', '849': 'Toholampi',
- '850': 'Toivakka', '851': 'Tornio', '853': 'Turku', '854': 'Pello', '857': 'Tuusniemi',
- '858': 'Tuusula', '859': 'Tyrnava', '886': 'Ulvila', '887': 'Urjala', '889': 'Utajarvi',
- '890': 'Utsjoki', '892': 'Uurainen', '893': 'Uusikaarlepyy', '895': 'Uusikaupunki', '905': 'Vaasa',
- '908': 'Valkeakoski', '911': 'Valtimo', '915': 'Varkaus', '918': 'Vehmaa', '921': 'Vesanto',
- '922': 'Vesilahti', '924': 'Veteli', '925': 'Vierema', '927': 'Vihti', '931': 'Viitasaari',
- '934': 'Vimpeli', '935': 'Virolahti', '936': 'Virrat', '941': 'Vardo', '946': 'Voyri',
- '976': 'Ylitornio', '977': 'Ylivieska', '980': 'Ylojarvi', '981': 'Ypaja', '989': 'Ahtari',
- '992': 'Aanekoski'
+ '5': 'Alajärvi',
+ '9': 'Alavieska',
+ '10': 'Alavus',
+ '16': 'Asikkala',
+ '18': 'Askola',
+ '19': 'Aura',
+ '20': 'Akaa',
+ '35': 'Brändö',
+ '43': 'Eckerö',
+ '46': 'Enonkoski',
+ '47': 'Enontekiö',
+ '49': 'Espoo',
+ '50': 'Eura',
+ '51': 'Eurajoki',
+ '52': 'Evijärvi',
+ '60': 'Finström',
+ '61': 'Forssa',
+ '62': 'Föglö',
+ '65': 'Geta',
+ '69': 'Haapajärvi',
+ '71': 'Haapavesi',
+ '72': 'Hailuoto',
+ '74': 'Halsua',
+ '75': 'Hamina',
+ '76': 'Hammarland',
+ '77': 'Hankasalmi',
+ '78': 'Hanko',
+ '79': 'Harjavalta',
+ '81': 'Hartola',
+ '82': 'Hattula',
+ '86': 'Hausjärvi',
+ '90': 'Heinävesi',
+ '91': 'Helsinki',
+ '92': 'Vantaa',
+ '97': 'Hirvensalmi',
+ '98': 'Hollola',
+ '99': 'Honkajoki',
+ '102': 'Huittinen',
+ '103': 'Humppila',
+ '105': 'Hyrynsalmi',
+ '106': 'Hyvinkää',
+ '108': 'Hämeenkyrö',
+ '109': 'Hämeenlinna',
+ '111': 'Heinola',
+ '139': 'Ii',
+ '140': 'Iisalmi',
+ '142': 'Iitti',
+ '143': 'Ikaalinen',
+ '145': 'Ilmajoki',
+ '146': 'Ilomantsi',
+ '148': 'Inari',
+ '149': 'Inkoo',
+ '151': 'Isojoki',
+ '152': 'Isokyrö',
+ '153': 'Imatra',
+ '165': 'Janakkala',
+ '167': 'Joensuu',
+ '169': 'Jokioinen',
+ '170': 'Jomala',
+ '171': 'Joroinen',
+ '172': 'Joutsa',
+ '176': 'Juuka',
+ '177': 'Juupajoki',
+ '178': 'Juva',
+ '179': 'Jyväskylä',
+ '181': 'Jämijärvi',
+ '182': 'Jämsä',
+ '186': 'Järvenpää',
+ '202': 'Kaarina',
+ '204': 'Kaavi',
+ '205': 'Kajaani',
+ '208': 'Kalajoki',
+ '211': 'Kangasala',
+ '213': 'Kangasniemi',
+ '214': 'Kankaanpää',
+ '216': 'Kannonkoski',
+ '217': 'Kannus',
+ '218': 'Karijoki',
+ '224': 'Karkkila',
+ '226': 'Karstula',
+ '230': 'Karvia',
+ '231': 'Kaskinen',
+ '232': 'Kauhajoki',
+ '233': 'Kauhava',
+ '235': 'Kauniainen',
+ '236': 'Kaustinen',
+ '239': 'Keitele',
+ '240': 'Kemi',
+ '241': 'Keminmaa',
+ '244': 'Kempele',
+ '245': 'Kerava',
+ '249': 'Keuruu',
+ '250': 'Kihniö',
+ '256': 'Kinnula',
+ '257': 'Kirkkonummi',
+ '260': 'Kitee',
+ '261': 'Kittilä',
+ '263': 'Kiuruvesi',
+ '265': 'Kivijärvi',
+ '271': 'Kokemäki',
+ '272': 'Kokkola',
+ '273': 'Kolari',
+ '275': 'Konnevesi',
+ '276': 'Kontiolahti',
+ '280': 'Korsnäs',
+ '284': 'Koski Tl',
+ '285': 'Kotka',
+ '286': 'Kouvola',
+ '287': 'Kristiinankaupunki',
+ '288': 'Kruunupyy',
+ '290': 'Kuhmo',
+ '291': 'Kuhmoinen',
+ '295': 'Kumlinge',
+ '297': 'Kuopio',
+ '300': 'Kuortane',
+ '301': 'Kurikka',
+ '304': 'Kustavi',
+ '305': 'Kuusamo',
+ '309': 'Outokumpu',
+ '312': 'Kyyjärvi',
+ '316': 'Kärkölä',
+ '317': 'Kärsämäki',
+ '318': 'Kökar',
+ '320': 'Kemijärvi',
+ '322': 'Kemiönsaari',
+ '398': 'Lahti',
+ '399': 'Laihia',
+ '400': 'Laitila',
+ '402': 'Lapinlahti',
+ '403': 'Lappajärvi',
+ '405': 'Lappeenranta',
+ '407': 'Lapinjärvi',
+ '408': 'Lapua',
+ '410': 'Laukaa',
+ '416': 'Lemi',
+ '417': 'Lemland',
+ '418': 'Lempäälä',
+ '420': 'Leppävirta',
+ '421': 'Lestijärvi',
+ '422': 'Lieksa',
+ '423': 'Lieto',
+ '425': 'Liminka',
+ '426': 'Liperi',
+ '430': 'Loimaa',
+ '433': 'Loppi',
+ '434': 'Loviisa',
+ '435': 'Luhanka',
+ '436': 'Lumijoki',
+ '438': 'Lumparland',
+ '440': 'Luoto',
+ '441': 'Luumäki',
+ '444': 'Lohja',
+ '445': 'Parainen',
+ '475': 'Maalahti',
+ '478': 'Maarianhamina',
+ '480': 'Marttila',
+ '481': 'Masku',
+ '483': 'Merijärvi',
+ '484': 'Merikarvia',
+ '489': 'Miehikkälä',
+ '491': 'Mikkeli',
+ '494': 'Muhos',
+ '495': 'Multia',
+ '498': 'Muonio',
+ '499': 'Mustasaari',
+ '500': 'Muurame',
+ '503': 'Mynämäki',
+ '504': 'Myrskylä',
+ '505': 'Mäntsälä',
+ '507': 'Mäntyharju',
+ '508': 'Mänttä-Vilppula',
+ '529': 'Naantali',
+ '531': 'Nakkila',
+ '535': 'Nivala',
+ '536': 'Nokia',
+ '538': 'Nousiainen',
+ '541': 'Nurmes',
+ '543': 'Nurmijärvi',
+ '545': 'Närpiö',
+ '560': 'Orimattila',
+ '561': 'Oripää',
+ '562': 'Orivesi',
+ '563': 'Oulainen',
+ '564': 'Oulu',
+ '576': 'Padasjoki',
+ '577': 'Paimio',
+ '578': 'Paltamo',
+ '580': 'Parikkala',
+ '581': 'Parkano',
+ '583': 'Pelkosenniemi',
+ '584': 'Perho',
+ '588': 'Pertunmaa',
+ '592': 'Petäjävesi',
+ '593': 'Pieksämäki',
+ '595': 'Pielavesi',
+ '598': 'Pietarsaari',
+ '599': 'Pedersören kunta',
+ '601': 'Pihtipudas',
+ '604': 'Pirkkala',
+ '607': 'Polvijärvi',
+ '608': 'Pomarkku',
+ '609': 'Pori',
+ '611': 'Pornainen',
+ '614': 'Posio',
+ '615': 'Pudasjärvi',
+ '616': 'Pukkila',
+ '619': 'Punkalaidun',
+ '620': 'Puolanka',
+ '623': 'Puumala',
+ '624': 'Pyhtää',
+ '625': 'Pyhäjoki',
+ '626': 'Pyhäjärvi',
+ '630': 'Pyhäntä',
+ '631': 'Pyhäranta',
+ '635': 'Pälkäne',
+ '636': 'Pöytyä',
+ '638': 'Porvoo',
+ '678': 'Raahe',
+ '680': 'Raisio',
+ '681': 'Rantasalmi',
+ '683': 'Ranua',
+ '684': 'Rauma',
+ '686': 'Rautalampi',
+ '687': 'Rautavaara',
+ '689': 'Rautjärvi',
+ '691': 'Reisjärvi',
+ '694': 'Riihimäki',
+ '697': 'Ristijärvi',
+ '698': 'Rovaniemi',
+ '700': 'Ruokolahti',
+ '702': 'Ruovesi',
+ '704': 'Rusko',
+ '707': 'Rääkkylä',
+ '710': 'Raasepori',
+ '729': 'Saarijärvi',
+ '732': 'Salla',
+ '734': 'Salo',
+ '736': 'Saltvik',
+ '738': 'Sauvo',
+ '739': 'Savitaipale',
+ '740': 'Savonlinna',
+ '742': 'Savukoski',
+ '743': 'Seinäjoki',
+ '746': 'Sievi',
+ '747': 'Siikainen',
+ '748': 'Siikajoki',
+ '749': 'Siilinjärvi',
+ '751': 'Simo',
+ '753': 'Sipoo',
+ '755': 'Siuntio',
+ '758': 'Sodankylä',
+ '759': 'Soini',
+ '761': 'Somero',
+ '762': 'Sonkajärvi',
+ '765': 'Sotkamo',
+ '766': 'Sottunga',
+ '768': 'Sulkava',
+ '771': 'Sund',
+ '777': 'Suomussalmi',
+ '778': 'Suonenjoki',
+ '781': 'Sysmä',
+ '783': 'Säkylä',
+ '785': 'Vaala',
+ '790': 'Sastamala',
+ '791': 'Siikalatva',
+ '831': 'Taipalsaari',
+ '832': 'Taivalkoski',
+ '833': 'Taivassalo',
+ '834': 'Tammela',
+ '837': 'Tampere',
+ '844': 'Tervo',
+ '845': 'Tervola',
+ '846': 'Teuva',
+ '848': 'Tohmajärvi',
+ '849': 'Toholampi',
+ '850': 'Toivakka',
+ '851': 'Tornio',
+ '853': 'Turku',
+ '854': 'Pello',
+ '857': 'Tuusniemi',
+ '858': 'Tuusula',
+ '859': 'Tyrnävä',
+ '886': 'Ulvila',
+ '887': 'Urjala',
+ '889': 'Utajärvi',
+ '890': 'Utsjoki',
+ '892': 'Uurainen',
+ '893': 'Uusikaarlepyy',
+ '895': 'Uusikaupunki',
+ '905': 'Vaasa',
+ '908': 'Valkeakoski',
+ '911': 'Valtimo',
+ '915': 'Varkaus',
+ '918': 'Vehmaa',
+ '921': 'Vesanto',
+ '922': 'Vesilahti',
+ '924': 'Veteli',
+ '925': 'Vieremä',
+ '927': 'Vihti',
+ '931': 'Viitasaari',
+ '934': 'Vimpeli',
+ '935': 'Virolahti',
+ '936': 'Virrat',
+ '941': 'Vårdö',
+ '946': 'Vöyri',
+ '976': 'Ylitornio',
+ '977': 'Ylivieska',
+ '980': 'Ylöjärvi',
+ '981': 'Ypäjä',
+ '989': 'Ähtäri',
+ '992': 'Äänekoski'
  };
  var settings = await loadJSON('settings', {
  apiKey: '',
@@ -723,10 +972,10 @@
  var poiLoadedKey = null;
  var poiFetchTimer = null;
  var poiFetchSeq = 0;
+ var vesijarviDepthLoaded = false;
 
  (settings.apiKey ? mmlLayer : osmLayer).addTo(map);
  sykeDepthLayer.addTo(map);
- vesijarviDepthLayer.addTo(map);
  if (settings.radarVisible !== false) rainRadarLayer.addTo(map);
  Object.keys(poiLayers).forEach(function (key) {
  if (settings.poiVisibility[key] !== false) poiLayers[key].addTo(map);
@@ -749,6 +998,8 @@
  L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
 
  async function loadVesijarviDepthLayer() {
+ if (vesijarviDepthLoaded) return;
+ vesijarviDepthLoaded = true;
  try {
  var res = await fetch('https://biwatech.com/vj3/kohteet/bathymetries/1');
  if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -764,10 +1015,14 @@
  });
  vesijarviDepthLayer.addData({ type: 'FeatureCollection', features: features });
  } catch (e) {
+ vesijarviDepthLoaded = false;
  console.warn('Vesijarven syvyysalueiden lataus epaonnistui:', e);
  }
  }
- loadVesijarviDepthLayer();
+
+ map.on('overlayadd', function (e) {
+ if (e.layer === vesijarviDepthLayer) loadVesijarviDepthLayer();
+ });
 
  function activePoiLayerKeys() {
  return Object.keys(poiLayers).filter(function (key) { return map.hasLayer(poiLayers[key]); });
@@ -811,12 +1066,24 @@
  return null;
  }
 
+ function safeHttpUrl(value) {
+ var raw = String(value || '').trim();
+ if (!/^https?:\/\//i.test(raw)) return '';
+ try {
+ var url = new URL(raw);
+ return /^https?:$/i.test(url.protocol) ? url.href : '';
+ } catch (e) {
+ return '';
+ }
+ }
+
  function poiPopupHtml(kind, tags) {
  var name = tags.name || tags['name:fi'] || poiLayerLabels[kind];
  var html = '<strong>' + escapeHtml(name) + '</strong><br>' + escapeHtml(poiLayerLabels[kind]);
  if (tags.operator) html += '<br>' + escapeHtml(tags.operator);
  if (tags.opening_hours) html += '<br><span class="mono">' + escapeHtml(tags.opening_hours) + '</span>';
- if (tags.website) html += '<br><a href="' + escapeHtml(tags.website) + '" target="_blank" rel="noopener">Verkkosivu</a>';
+ var website = safeHttpUrl(tags.website);
+ if (website) html += '<br><a href="' + escapeHtml(website) + '" target="_blank" rel="noopener">Verkkosivu</a>';
  return html;
  }
 
@@ -1000,12 +1267,18 @@
  return haversine(lastWeatherFetch.lat, lastWeatherFetch.lon, lat, lon) > 3000;
  }
 
+ function weatherCoord(value) {
+ return Math.round(Number(value) * 100) / 100;
+ }
+
  async function fetchWeather(lat, lon, sourceLabel, force) {
- if (weatherFetchInFlight || (!force && !shouldFetchWeather(lat, lon))) return;
+ var queryLat = weatherCoord(lat);
+ var queryLon = weatherCoord(lon);
+ if (weatherFetchInFlight || (!force && !shouldFetchWeather(queryLat, queryLon))) return;
  weatherFetchInFlight = true;
  try {
- var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat.toFixed(4)) +
- '&longitude=' + encodeURIComponent(lon.toFixed(4)) +
+ var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(queryLat.toFixed(2)) +
+ '&longitude=' + encodeURIComponent(queryLon.toFixed(2)) +
  '&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&temperature_unit=celsius';
  var res = await fetch(url, { cache: 'no-store' });
  if (!res.ok) throw new Error('weather status ' + res.status);
@@ -1018,7 +1291,7 @@
  currentWind = { speed: speed, direction: direction, dirLabel: windDirectionLabel(direction) };
  currentWeather = { temperature: temperature, code: weatherCode, label: weatherLabel(weatherCode), icon: weatherIcon(weatherCode) };
  weatherSourceLabel = sourceLabel || 'Kartta';
- lastWeatherFetch = { lat: lat, lon: lon, t: Date.now(), source: weatherSourceLabel };
+ lastWeatherFetch = { lat: queryLat, lon: queryLon, t: Date.now(), source: weatherSourceLabel };
  updateHud();
  }
  } catch (e) {
@@ -1258,12 +1531,22 @@
  panelClose.addEventListener('click', function () { panel.classList.add('hidden'); });
 
  apiKeySave.addEventListener('click', async function () {
+ var previousApiKey = settings.apiKey || '';
  settings.apiKey = apiKeyInput.value.trim();
  await saveJSON('settings', settings);
  mmlLayer.setUrl(mmlTileUrl());
  if (settings.apiKey && !map.hasLayer(mmlLayer)) {
  map.removeLayer(osmLayer);
  mmlLayer.addTo(map);
+ }
+ if (settings.apiKey !== previousApiKey) {
+ try {
+ await postServiceWorkerMessage({ type: 'CLEAR_TILE_CACHE' });
+ tileCacheStatus.textContent = 'API-avain vaihtui, tile-cache tyhjennetty.';
+ await updateTileCacheStatus();
+ } catch (e) {
+ tileCacheStatus.textContent = 'API-avain tallennettu. Tyhjennä tile-cache reloadin jälkeen.';
+ }
  }
  });
 
