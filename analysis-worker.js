@@ -1,9 +1,10 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, wgs84ToTm35 } from './analysis.js';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js';
 
-var DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
+var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
+var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
 var TILE_M = 6000;
 var TILE_TTL_MS = 30 * 24 * 3600 * 1000;
 var MEM_MAX = 60;
@@ -12,6 +13,7 @@ var CACHE_MAX_BYTES = 12 * 1024 * 1024;
 var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
+var TILE_CACHE_PREFIX = 't:v2:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -139,17 +141,44 @@ async function fetchTile(key) {
   var parts = key.split(':');
   var tx = parseInt(parts[0], 10), ty = parseInt(parts[1], 10);
   var bbox = [tx * TILE_M, ty * TILE_M, (tx + 1) * TILE_M, (ty + 1) * TILE_M].join(',') + ',EPSG:3067';
-  var base = DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
-  var responses = await Promise.all([
-    fetch(base + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
-    fetch(base + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
-  ]);
-  if (!responses[0].ok || !responses[1].ok) throw new Error('WFS ' + responses[0].status + '/' + responses[1].status);
   var tile = {
     t: Date.now(),
-    c: parseContours(await responses[0].json()),
-    b: parseBands(await responses[1].json())
+    c: [],
+    b: [],
+    s: [],
+    sources: []
   };
+  var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+  try {
+    var sykeResponses = await Promise.all([
+      fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
+      fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
+    ]);
+    if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
+    tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
+    tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
+    if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
+  } catch (e) {
+    console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
+  }
+  var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+  try {
+    var traficomResponses = await Promise.all([
+      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L'), { cache: 'no-store' }),
+      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
+      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
+    ]);
+    if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
+      throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
+    }
+    var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
+    tile.c = tile.c.concat(parseContours(await traficomResponses[0].json()));
+    tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
+    tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
+    if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
+  } catch (e) {
+    console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
+  }
   return tile;
 }
 
@@ -159,7 +188,7 @@ async function getTile(key) {
   if (fetching.has(key)) return fetching.get(key);
   var promise = (async function () {
     try {
-      var cached = await idbGet('t:' + key);
+      var cached = await idbGet(TILE_CACHE_PREFIX + key);
       if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
         putMem(key, cached.value);
         return cached.value;
@@ -169,7 +198,7 @@ async function getTile(key) {
     putMem(key, tile);
     var size = 0;
     try { size = JSON.stringify(tile).length; } catch (e) { size = 100000; }
-    idbPut({ key: 't:' + key, value: tile, updated: Date.now(), size: size }).then(trimCache).catch(function () {});
+    idbPut({ key: TILE_CACHE_PREFIX + key, value: tile, updated: Date.now(), size: size }).then(trimCache).catch(function () {});
     return tile;
   })();
   fetching.set(key, promise);
@@ -215,13 +244,16 @@ async function handleBuild(msg) {
   });
   var contourById = new Map();
   var bandById = new Map();
+  var soundingById = new Map();
   tiles.forEach(function (tile) {
     (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
     (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
+    (tile.s || []).forEach(function (s) { soundingById.set(s.id, s); });
   });
   var result = buildAnalysis({
     contours: Array.from(contourById.values()),
     bands: Array.from(bandById.values()),
+    soundings: Array.from(soundingById.values()),
     wind: msg.wind,
     west: msg.west,
     south: msg.south,

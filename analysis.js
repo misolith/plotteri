@@ -61,7 +61,8 @@ export function wgs84ToTm35(lat, lon) {
 export function parseContours(fc) {
   var out = [];
   (fc && fc.features || []).forEach(function (feat) {
-    var depth = parseFloat(feat.properties && feat.properties.syvyyskayra_m);
+    var props = feat.properties || {};
+    var depth = firstNumber(props, ['syvyyskayra_m', 'VALDCO']);
     if (isNaN(depth)) return;
     var geom = feat.geometry;
     if (!geom) return;
@@ -71,6 +72,16 @@ export function parseContours(fc) {
     out.push({ id: feat.id, d: depth, lines: lines });
   });
   return out;
+}
+
+function firstNumber(props, names) {
+  for (var i = 0; i < names.length; i++) {
+    var value = props && props[names[i]];
+    if (value == null || value === '') continue;
+    var num = parseFloat(String(value).replace(',', '.'));
+    if (!isNaN(num)) return num;
+  }
+  return NaN;
 }
 
 export function parseBandRange(text) {
@@ -84,7 +95,13 @@ export function parseBandRange(text) {
 export function parseBands(fc) {
   var out = [];
   (fc && fc.features || []).forEach(function (feat) {
-    var range = parseBandRange(feat.properties && feat.properties.syvyysvali_m);
+    var props = feat.properties || {};
+    var range = parseBandRange(props.syvyysvali_m);
+    if (!range) {
+      var lo = firstNumber(props, ['DRVAL1']);
+      var hi = firstNumber(props, ['DRVAL2']);
+      if (!isNaN(lo) && !isNaN(hi)) range = { lo: lo, hi: hi, mid: (lo + hi) / 2 };
+    }
     var geom = feat.geometry;
     if (!range || !geom) return;
     var polys = geom.type === 'MultiPolygon' ? geom.coordinates :
@@ -93,6 +110,23 @@ export function parseBands(fc) {
       if (!rings.length || rings[0].length < 4) return;
       var bbox = ringBbox(rings[0]);
       out.push({ id: feat.id + ':' + idx, lo: range.lo, hi: range.hi, mid: range.mid, rings: rings, bbox: bbox });
+    });
+  });
+  return out;
+}
+
+export function parseSoundings(fc) {
+  var out = [];
+  (fc && fc.features || []).forEach(function (feat) {
+    var depth = firstNumber(feat.properties || {}, ['DEPTH', 'depth']);
+    if (isNaN(depth)) return;
+    var geom = feat.geometry;
+    if (!geom) return;
+    var points = geom.type === 'MultiPoint' ? geom.coordinates :
+      geom.type === 'Point' ? [geom.coordinates] : [];
+    points.forEach(function (p, idx) {
+      if (!p || p.length < 2) return;
+      out.push({ id: feat.id + ':' + idx, x: p[0], y: p[1], d: depth });
     });
   });
   return out;
@@ -129,6 +163,7 @@ function pointInRings(lon, lat, rings) {
 export function buildAnalysis(input) {
   var contours = input.contours || [];
   var bands = input.bands || [];
+  var soundings = input.soundings || [];
   var wind = input.wind || null;
   var west = input.west, south = input.south, east = input.east, north = input.north;
   var weights = Object.assign({}, SCORE_WEIGHTS, input.weights || {});
@@ -161,6 +196,10 @@ export function buildAnalysis(input) {
 
   // 1) syvyyspisteet kayravertekseista
   var points = [];
+  soundings.forEach(function (p) {
+    if (p.x < west - 0.01 || p.x > east + 0.01 || p.y < south - 0.01 || p.y > north + 0.01) return;
+    points.push({ x: p.x, y: p.y, d: p.d });
+  });
   contours.forEach(function (c) {
     c.lines.forEach(function (line) {
       for (var i = 0; i < line.length; i++) {

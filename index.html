@@ -372,7 +372,7 @@
  <button id="depth-cache-clear">Tyhjennä syvyyscache</button>
  </div>
  <p id="depth-status" class="hint">Lähennä järvelle (zoom 12+), niin indeksi lasketaan.</p>
- <p class="hint">Indeksi lasketaan SYKEn järvisyvyysdatasta: syvänteiden reunat, tuulen altistamat rannat ja syvyysvyöhyke. Kattaa vain luodatut järvet, ei merialueita. Olosuhdemerkki (🎣) huomioi ilmanpaineen trendin ja kuunkierron.</p>
+ <p class="hint">Indeksi lasketaan SYKEn järvisyvyysdatasta ja Traficomin merisyvyysdatasta: syvänteiden reunat, tuulen altistamat rannat ja syvyysvyöhyke. Traficomin aineisto kattaa avoimena merialueen talousvyöhykkeen sekä Vuoksen ja Kymijoen vesistöt. Olosuhdemerkki (🎣) huomioi ilmanpaineen trendin ja kuunkierron. Traficom: Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.</p>
  </section>
 
  <section>
@@ -470,7 +470,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS } from './analysis.js';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS } from './analysis.js';
 
 (async function () {
  'use strict';
@@ -1115,13 +1115,14 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  attribution: 'OpenStreetMap'
  });
 
+ var TRAFICOM_ATTRIBUTION = 'Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.';
  var traficomChartLayer = L.tileLayer(
  'https://julkinen.traficom.fi/rasteripalvelu/wmts?request=GetTile&version=1.0.0&service=WMTS&layer=Traficom:Merikarttasarjat%20public&style=default&tilematrixset=WGS84_Pseudo-Mercator&TileMatrix=WGS84_Pseudo-Mercator:{z}&TileRow={y}&TileCol={x}&format=image/png',
  {
  maxZoom: 18,
  maxNativeZoom: 15,
  tileSize: 256,
- attribution: 'Traficom. Ei navigointikäyttöön.',
+ attribution: TRAFICOM_ATTRIBUTION,
  errorTileUrl: TRANSPARENT_PX
  }
  );
@@ -1171,6 +1172,12 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  });
 
  var fishIndexLayer = L.layerGroup();
+ fishIndexLayer.on('add', function () {
+ if (map.attributionControl) map.attributionControl.addAttribution(TRAFICOM_ATTRIBUTION);
+ });
+ fishIndexLayer.on('remove', function () {
+ if (map.attributionControl) map.attributionControl.removeAttribution(TRAFICOM_ATTRIBUTION);
+ });
 
  var poiLayers = {
  firepit: L.layerGroup(),
@@ -1505,8 +1512,9 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
  }
 
- // ---------- kalapaikka-analyysi: syvyystiilet SYKE WFS:sta ----------
- var DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
+ // ---------- kalapaikka-analyysi: syvyystiilet SYKE + Traficom WFS:sta ----------
+ var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
+ var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
  var DEPTH_TILE_M = 6000;
  var DEPTH_MIN_ZOOM = 12;
  var DEPTH_TILE_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -1514,7 +1522,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var DEPTH_CACHE_MAX_ENTRIES = 150;
  var DEPTH_MAX_TILES_PER_VIEW = 35;
  var DEPTH_MEM_MAX = 60;
- var DEPTH_KEY_PREFIX = 'depthtile:v1:';
+ var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
  var depthWorkTimer = null;
@@ -1569,17 +1577,44 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var parts = key.split(':');
  var tx = parseInt(parts[0], 10), ty = parseInt(parts[1], 10);
  var bbox = [tx * DEPTH_TILE_M, ty * DEPTH_TILE_M, (tx + 1) * DEPTH_TILE_M, (ty + 1) * DEPTH_TILE_M].join(',') + ',EPSG:3067';
- var base = DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
- var responses = await Promise.all([
- fetch(base + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
- fetch(base + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
- ]);
- if (!responses[0].ok || !responses[1].ok) throw new Error('WFS ' + responses[0].status + '/' + responses[1].status);
  var tile = {
  t: Date.now(),
- c: parseContours(await responses[0].json()),
- b: parseBands(await responses[1].json())
+ c: [],
+ b: [],
+ s: [],
+ sources: []
  };
+ var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+ try {
+ var sykeResponses = await Promise.all([
+ fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
+ fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
+ ]);
+ if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
+ tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
+ tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
+ if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
+ } catch (e) {
+ console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
+ }
+ var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+ try {
+ var traficomResponses = await Promise.all([
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L'), { cache: 'no-store' }),
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
+ ]);
+ if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
+ throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
+ }
+ var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
+ tile.c = tile.c.concat(parseContours(await traficomResponses[0].json()));
+ tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
+ tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
+ if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
+ } catch (e) {
+ console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
+ }
  putDepthMem(key, tile);
  saveJSON(DEPTH_KEY_PREFIX + key, tile).then(trimDepthCache);
  return tile;
@@ -1853,13 +1888,16 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var tiles = await ensureDepthTiles(keys);
  var contourById = new Map();
  var bandById = new Map();
+ var soundingById = new Map();
  tiles.forEach(function (tile) {
  (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
  (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
+ (tile.s || []).forEach(function (s) { soundingById.set(s.id, s); });
  });
  var a = buildAnalysis({
  contours: Array.from(contourById.values()),
  bands: Array.from(bandById.values()),
+ soundings: Array.from(soundingById.values()),
  wind: currentWind,
  west: snap.west,
  south: snap.south,
@@ -1914,7 +1952,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  lastAnalysisWindKey = windAnalysisKey();
  if (!a || !a.hasData) {
  clearIndexOverlay();
- setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE kattaa vain luodatut järvet).');
+ setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE järville, Traficom merelle sekä Vuoksen ja Kymijoen vesistöihin).');
  if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
  return null;
  }
