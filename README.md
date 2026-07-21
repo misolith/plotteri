@@ -1,21 +1,129 @@
 # Plotteri
 
-Kalastusplotteri selaimessa.
+Plotteri on selaimessa toimiva kalastus- ja veneilykartta Suomen vesille. Sovellus toimii staattisena web-appina, tallentaa käyttäjän omat tiedot selaimeen ja voidaan asentaa puhelimen tai tabletin kotinäytölle PWA-sovelluksena.
 
-## Sisalto
+Tuotanto: https://lith.fi/app/map/
 
-- `index.html` - staattinen Leaflet-pohjainen karttasovellus
-- `analysis.js` - kalapaikka-analyysin laskenta: syvyysruudukko, gradientti, tuulialtistus, paivakerroin
-- `view3d.js` - jarven 3D-syvyysnakyma (ladataan vasta avattaessa, three.js cdnjs:sta)
-- `map-sw.js` - service worker katsottujen karttatilejen valimuistille
-- `manifest.json` ja `icons/` - PWA-asennus kotinaytolle
+## Ominaisuudet
 
-Sovellus kayttaa kayttajan selaimeen tallennettua MML API-avainta. Avainta ei ole mukana repossa. Reitit, kalapaikat ja muu sovellusdata tallennetaan selaimen IndexedDB:hen localStorage-varmistuksella.
+- Leaflet-kartta MML:n maastokartalla, OpenStreetMapilla, Traficomin merikartalla ja SYKE:n syvyyskerroksilla.
+- GPS-seuranta nopeudella, suunnalla, tarkkuudella, wake lockilla ja reitin tallennuksella.
+- Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella.
+- Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
+- Kalapaikka-indeksi: SYKEn vektorimuotoisesta järvisyvyysdatasta laskettu karttataso, joka korostaa syvänteiden reunat ja tuulen altistamat rannat.
+- Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
+- Järven 3D-syvyysnäkymä, joka ladataan vasta avattaessa.
+- MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille.
+- OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat ja terassit/ulkotarjoilu.
+- FMI:n sadetutka karttaoverlaynä.
+- Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
+- Selaimen tile-cache vain oikeasti katsotuille karttatileille, rajatulla tilemäärällä ja säilytysajalla.
+- PWA-manifesti ja ikoni kotinäyttöasennusta varten.
 
 ## Kalapaikka-analyysi
 
-- Syvyysdata haetaan vektorina SYKEn `inspire_el`-WFS:sta (jarvien syvyyskayrat ja -alueet, EPSG:3067). Kattaa vain luodatut jarvet, ei merialueita.
-- Kalapaikka-indeksi (karttataso): syvanteen reunat (gradientti IDW-ruudukosta), tuulen altistamat rannat (0-kayran normaali vs. tuulen suunta) ja syvyysvyohykepainotus.
-- Olosuhteet tanaan (HUD-merkki): ilmanpaineen 3 h trendi (Open-Meteo) + kuunkierto ja parhaat ajat (SunCalc). Ei riipu sijainnista kartalla.
-- Syvyystiilet (6 km) cachetetaan IndexedDB:hen: TTL 30 pv, enintaan 150 tiilta / 12 Mt, LRU-siivous.
-- 3D-nakyma rakennetaan samasta syvyysruudukosta; three.js ladataan vasta nakymaa avattaessa.
+- Syvyysdata haetaan vektorina SYKEn `inspire_el`-WFS:stä (järvien syvyyskäyrät ja -vyöhykkeet, EPSG:3067). Kattaa vain luodatut järvet, ei merialueita.
+- Kalapaikka-indeksi (karttataso): syvänteen reunat (gradientti IDW-syvyysruudukosta), tuulen altistamat rannat (0-käyrän normaali vs. tuulen suunta) ja syvyysvyöhykepainotus. Painot ovat `analysis.js`:n `SCORE_WEIGHTS`-objektissa.
+- Olosuhteet tänään (HUD-merkki): ilmanpaineen 3 h trendi (Open-Meteo) + kuunkierto ja parhaat ajat (SunCalc). Ei riipu sijainnista kartalla.
+- Syvyystiilet (6 km) cachetetaan IndexedDB:hen: TTL 30 pv, enintään 150 tiiltä / 12 Mt, LRU-siivous. Paneelissa tila ja tyhjennys.
+- 3D-näkymä rakennetaan samasta syvyysruudukosta; three.js ladataan cdnjs:stä vasta näkymää avattaessa.
+
+## Datalähteet
+
+Plotteri käyttää julkisia kartta- ja ympäristöaineistoja useista lähteistä:
+
+- Maanmittauslaitos (MML): maastokartta ja paikannimihaku.
+- OpenStreetMap: taustakartta ja POI-kohteet.
+- Traficom: julkiset merikarttatiilet.
+- Suomen ympäristökeskus (SYKE): WMS-karttatasot ja järvisyvyysdata WFS-vektoreina.
+- Ilmatieteen laitos (FMI): WMS-sadetutka.
+- Open-Meteo: säädata ja ilmanpaineen trendi, pyöristetyillä koordinaateilla.
+- Vesijärven syvyysalueiden GeoJSON-lähde, joka on määritelty sovelluksessa.
+
+Osa palveluista voi edellyttää käyttäjän omaa API-avainta. MML API-avain tallennetaan vain käyttäjän selaimeen, eikä sitä ole mukana repossa.
+
+## Tietosuoja Ja Tallennus
+
+Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
+
+- Reitit, kalapaikat, asetukset ja välimuistiin tallennettu Vesijärvi-data ovat selaimen IndexedDB:ssä.
+- Asetuksia peilataan tarvittaessa localStorageen yhteensopivuuden vuoksi.
+- MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön.
+- Säähaut lähettävät Open-Meteolle pyöristetyn sijainnin.
+- Tile-cache tallentaa vain ne karttatiilet, joita käyttäjä on oikeasti katsonut.
+- Syvyystiilet cachetetaan IndexedDB:hen rajatulla määrällä ja säilytysajalla.
+- FMI:n sadetutkaa ei cacheteta, koska sääkuva vanhenee nopeasti.
+
+Selaimen, käyttöjärjestelmän tai käyttäjän oma tyhjennys voi poistaa paikalliset tiedot. Tärkeät reitit ja kalapaikat kannattaa viedä talteen tarvittaessa.
+
+## Tile-Cache
+
+Service worker tallentaa katsottuja karttatilejä, jotta kartta toimii paremmin hitaalla yhteydellä. Cache on tarkoituksella rajattu:
+
+- Ei massalatausta offline-kartaksi.
+- Ei automaattista laajojen järvialueiden esilatausta.
+- Asetuksissa säädettävä enimmäismäärä ja säilytysaika.
+- Asetuksissa manuaalinen cache-tyhjennys.
+
+Tämä säästää kaistaa ja pitää kolmansien osapuolten tile-palveluiden käytön kohtuullisena.
+
+## Paikallinen Kehitys
+
+Sovellus on staattista HTML/CSS/JavaScriptiä.
+
+```bash
+cd /home/miso/.openclaw/workspace/projects/plotteri
+python3 -m http.server 8080
+```
+
+Avaa sen jälkeen:
+
+```text
+http://localhost:8080/
+```
+
+Käytä paikallista web-palvelinta suoran `index.html`-avauksen sijaan, koska service workerit, moduuliskriptit ja osa selain-API:eista vaativat HTTP-originin.
+
+## Repon Rakenne
+
+```text
+index.html              Pääsovellus
+analysis.js             Kalapaikka-analyysin laskenta (syvyysruudukko, gradientti, tuulialtistus, päiväkerroin)
+view3d.js               Järven 3D-syvyysnäkymä (lazy-ladattava)
+map-sw.js               Service worker katsottujen tilejen cachelle
+manifest.json           PWA-manifesti
+icons/plotteri-icon.svg PWA-ikoni
+README.md               Projektin dokumentaatio
+LICENSE                 MIT-lisenssi
+```
+
+## Julkaisu
+
+Tuotantoversio palvellaan tällä hetkellä osoitteesta:
+
+```text
+https://lith.fi/app/map/
+```
+
+Julkaisukohde odottaa näitä staattisia tiedostoja sellaisenaan:
+
+- `index.html`
+- `analysis.js`
+- `view3d.js`
+- `map-sw.js`
+- `manifest.json`
+- `icons/plotteri-icon.svg`
+
+## Mahdollisia Jatkokehityksiä
+
+Hyviä seuraavia kohteita:
+
+- FMI-sadetutkan animaatio tai aikaleiman valinta.
+- Paremmat veneilykohteet: vierasvenesatamat, rampit, septiasemat ja vesipisteet.
+- Kalastusrajoitukset ja lupa-alueet karttatasoina.
+- Reittien rakenteisemmat haut, esimerkiksi kuukauden tai vesialueen mukaan.
+- Reittien ja kalapaikkojen tuonti/vienti käyttöliittymästä.
+
+## Lisenssi
+
+MIT. Katso [LICENSE](LICENSE).
