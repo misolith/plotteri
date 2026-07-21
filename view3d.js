@@ -45,6 +45,7 @@ export async function openBathy3d(analysis, opts) {
     '<div data-role="canvas-wrap" style="flex:1;min-height:0;position:relative;"></div>' +
     '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px calc(12px + env(safe-area-inset-bottom));color:#6f8e99;font-size:12px;">' +
     '<button data-act="follow" style="flex:0 0 auto;background:#163244;color:#d8e6ea;border:1px solid #234a5f;border-radius:8px;padding:7px 12px;font-size:12px;">Seuraa</button>' +
+    '<button data-act="sim" title="Testivene näkymän keskelle, raahaus kääntää" style="flex:0 0 auto;background:#163244;color:#d8e6ea;border:1px solid #234a5f;border-radius:8px;padding:7px 12px;font-size:12px;">Testivene</button>' +
     '<span>Korostus</span>' +
     '<input data-act="ex" type="range" min="1" max="10" step="0.5" value="4" style="flex:1;min-width:0;accent-color:#e8a13c;">' +
     '<span data-role="ex-val" class="mono" style="color:#d8e6ea;">4×</span>' +
@@ -56,6 +57,7 @@ export async function openBathy3d(analysis, opts) {
   var exInput = overlay.querySelector('[data-act="ex"]');
   var exVal = overlay.querySelector('[data-role="ex-val"]');
   var followBtn = overlay.querySelector('[data-act="follow"]');
+  var simBtn = overlay.querySelector('[data-act="sim"]');
 
   // ---------- scene ----------
   var renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -178,6 +180,7 @@ export async function openBathy3d(analysis, opts) {
     if (boat.hasFix) {
       var d = depthAtLatLon(boat.lat, boat.lon);
       if (!isNaN(d)) text += ' · veneen alla ~' + d.toFixed(1) + ' m';
+      if (simActive) text += ' · suunta ' + Math.round(((boat.tgtH % 360) + 360) % 360) + '°';
     }
     subtitleEl.textContent = text;
   }
@@ -185,6 +188,7 @@ export async function openBathy3d(analysis, opts) {
   // ---------- kamera ----------
   var mode = 'orbit';
   var userChoseMode = false;
+  var simActive = false;
   var target = new THREE.Vector3(0, 0, 0);
   var radius = 1, theta = Math.PI * 1.75, phi = 0.9;
   var chaseDist = 140;
@@ -239,7 +243,7 @@ export async function openBathy3d(analysis, opts) {
   function onPointerDown(e) {
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     renderer.domElement.setPointerCapture(e.pointerId);
-    if (mode === 'follow') {
+    if (mode === 'follow' && !simActive) {
       syncOrbitFromCamera();
       setMode('orbit', true);
     }
@@ -248,9 +252,14 @@ export async function openBathy3d(analysis, opts) {
     var p = pointers.get(e.pointerId);
     if (!p) return;
     if (pointers.size === 1) {
-      theta -= (e.clientX - p.x) * 0.006;
-      phi += (e.clientY - p.y) * 0.005;
-      applyOrbitCamera();
+      if (simActive && mode === 'follow') {
+        boat.tgtH = ((boat.tgtH + (e.clientX - p.x) * 0.4) % 360 + 360) % 360;
+        updateSubtitle();
+      } else {
+        theta -= (e.clientX - p.x) * 0.006;
+        phi += (e.clientY - p.y) * 0.005;
+        applyOrbitCamera();
+      }
     } else if (pointers.size === 2) {
       p.x = e.clientX; p.y = e.clientY;
       var pts = Array.from(pointers.values());
@@ -285,6 +294,31 @@ export async function openBathy3d(analysis, opts) {
     if (mode === 'orbit') syncOrbitFromCamera();
   });
 
+  function setSim(on) {
+    simActive = !!on;
+    simBtn.style.background = simActive ? '#e8a13c' : '#163244';
+    simBtn.style.color = simActive ? '#05141c' : '#d8e6ea';
+    simBtn.style.borderColor = simActive ? '#e8a13c' : '#234a5f';
+    if (simActive) {
+      boat.lat = (a.south + a.north) / 2;
+      boat.lon = (a.west + a.east) / 2;
+      var local = toLocal(boat.lat, boat.lon);
+      boat.hasFix = true;
+      boat.curX = boat.tgtX = local.x;
+      boat.curZ = boat.tgtZ = local.z;
+      boat.tgtH = boat.curH = 0;
+      marker.visible = true;
+      setMode('follow', false);
+    } else {
+      boat.hasFix = false;
+      marker.visible = false;
+      syncOrbitFromCamera();
+      setMode('orbit', false);
+    }
+    updateSubtitle();
+  }
+  simBtn.addEventListener('click', function () { setSim(!simActive); });
+
   exInput.addEventListener('input', function () {
     exaggeration = parseFloat(exInput.value) || 4;
     exVal.textContent = exaggeration + '×';
@@ -304,6 +338,7 @@ export async function openBathy3d(analysis, opts) {
   var lastEdgeCallAt = 0;
 
   function updateBoat(lat, lon, headingDeg) {
+    if (simActive) return;
     if (!isFinite(lat) || !isFinite(lon)) return;
     boat.lat = lat;
     boat.lon = lon;
@@ -388,5 +423,5 @@ export async function openBathy3d(analysis, opts) {
   applyOrbitCamera();
   frame();
 
-  return { close: close, updateBoat: updateBoat, setAnalysis: setAnalysis };
+  return { close: close, updateBoat: updateBoat, setAnalysis: setAnalysis, setSim: setSim };
 }
