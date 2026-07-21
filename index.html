@@ -38,11 +38,18 @@
  background: rgba(5,20,28,0.78); border: 1px solid rgba(35,74,95,0.72);
  border-radius: 8px; padding: 8px 9px; min-height: 46px; box-shadow: 0 2px 10px rgba(0,0,0,0.28);
  }
- #hud .hud-block:nth-of-type(4) {
- grid-column: 1 / -1; width: fit-content; max-width: 100%; min-height: 0;
- background: rgba(5,20,28,0.24); border: 1px solid rgba(35,74,95,0.22); box-shadow: none;
- padding: 3px 7px; opacity: 0.82;
+ #hud-row2 {
+ grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+ min-width: 0; pointer-events: none;
  }
+ .hud-pill {
+ display: flex; align-items: center; gap: 6px; pointer-events: auto; min-width: 0;
+ background: rgba(5,20,28,0.62); border: 1px solid rgba(35,74,95,0.55);
+ border-radius: 16px; padding: 4px 11px; font-size: 12px; font-weight: 700; color: #9fc0ca;
+ text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ #hud-coords-pill { flex: 0 1 auto; overflow: hidden; }
+ #hud-coords { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
  .hud-label {
  display: none;
  }
@@ -221,13 +228,7 @@
  }
  .leaflet-bottom.leaflet-right { bottom: calc(82px + env(safe-area-inset-bottom)); }
 
- #day-chip {
- grid-column: 1 / -1; width: fit-content; max-width: 100%;
- display: flex; align-items: center; gap: 6px; pointer-events: auto;
- background: rgba(5,20,28,0.62); border: 1px solid rgba(35,74,95,0.55);
- border-radius: 16px; padding: 4px 11px; font-size: 12px; font-weight: 700; color: #9fc0ca;
- text-shadow: 0 1px 3px rgba(0,0,0,0.85);
- }
+ #day-chip { flex: 0 0 auto; white-space: nowrap; }
  #day-chip.good { color: #7ddf64; border-color: rgba(125,223,100,0.45); }
  #day-chip.mid { color: #e8a13c; border-color: rgba(232,161,60,0.45); }
  #day-chip.poor { color: #ff8a72; border-color: rgba(209,80,58,0.45); }
@@ -283,11 +284,12 @@
  <div class="hud-label">Nopeus</div>
  <div id="hud-speed" class="hud-speed-value mono">-- km/h</div>
  </div>
- <div class="hud-block">
- <div class="hud-label">Sijainti</div>
- <div id="hud-coords" class="hud-sub-value mono">haetaan sijaintia</div>
+ <div id="hud-row2">
+ <button id="day-chip" class="mono hud-pill" title="Olosuhteet tänään">🎣 --</button>
+ <div id="hud-coords-pill" class="hud-pill" title="Sijainti">
+ <span id="hud-coords" class="mono">haetaan sijaintia</span>
  </div>
- <button id="day-chip" class="mono" title="Olosuhteet tänään">🎣 --</button>
+ </div>
  <div id="rec-indicator" class="hidden">
  <span class="dot"></span><span id="rec-time" class="mono">00:00</span>
  </div>
@@ -1597,6 +1599,14 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  }
 
  async function updateDepthCacheStatus() {
+ if (!analysisWorkerBroken) {
+ try {
+ var res = await workerRequest({ type: 'status' });
+ setDepthStatus('Syvyyscache: ' + res.count + ' tiiltä, ' + (res.bytes / 1048576).toFixed(1) + ' MB (raja ' +
+ res.maxEntries + ' / ' + Math.round(res.maxBytes / 1048576) + ' MB).');
+ return;
+ } catch (e) { /* fallback alle */ }
+ }
  try {
  var entries = await listDepthCacheEntries();
  var bytes = entries.reduce(function (sum, e) { return sum + e.size; }, 0);
@@ -1608,15 +1618,21 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  }
 
  async function clearDepthCache() {
+ var ok = false;
+ if (!analysisWorkerBroken) {
+ try {
+ await workerRequest({ type: 'clear' });
+ ok = true;
+ } catch (e) { /* fallback alle */ }
+ }
  try {
  var entries = await listDepthCacheEntries();
  for (var i = 0; i < entries.length; i++) await idbDelete(entries[i].key);
  depthTilesMem.clear();
- showToast('Syvyyscache tyhjennetty (' + entries.length + ' tiiltä)');
+ ok = true;
+ } catch (e) { /* kv-siivous on toissijainen */ }
+ showToast(ok ? 'Syvyyscache tyhjennetty' : 'Tyhjennys epäonnistui');
  updateDepthCacheStatus();
- } catch (e) {
- showToast('Tyhjennys epäonnistui');
- }
  }
 
  // ---------- analyysin rakennus ja overlay ----------
@@ -1683,39 +1699,43 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var analysisWorkerMsgSeq = 0;
  var analysisWorkerPending = new Map();
 
- function buildAnalysisInWorker(input) {
- if (analysisWorkerBroken || typeof Worker === 'undefined') {
- return Promise.resolve(buildAnalysis(input));
- }
+ function ensureAnalysisWorker() {
+ if (analysisWorkerBroken || typeof Worker === 'undefined') return null;
+ if (analysisWorker) return analysisWorker;
  try {
- if (!analysisWorker) {
  analysisWorker = new Worker('analysis-worker.js', { type: 'module' });
  analysisWorker.onmessage = function (e) {
  var msg = e.data || {};
  var pending = analysisWorkerPending.get(msg.id);
  if (!pending) return;
+ if (msg.progress) {
+ if (pending.onProgress) pending.onProgress(msg.progress);
+ return;
+ }
  analysisWorkerPending.delete(msg.id);
  if (msg.error) pending.reject(new Error(msg.error));
- else pending.resolve(msg.result);
+ else pending.resolve(msg);
  };
- analysisWorker.onerror = function (err) {
+ analysisWorker.onerror = function () {
  analysisWorkerBroken = true;
- analysisWorkerPending.forEach(function (p) { p.reject(err instanceof Error ? err : new Error('worker error')); });
+ analysisWorkerPending.forEach(function (p) { p.reject(new Error('worker error')); });
  analysisWorkerPending.clear();
  };
- }
- return new Promise(function (resolve, reject) {
- var id = ++analysisWorkerMsgSeq;
- analysisWorkerPending.set(id, { resolve: resolve, reject: reject });
- analysisWorker.postMessage({ id: id, input: input });
- }).catch(function (e) {
- console.warn('Analyysiworker epäonnistui, lasketaan suoraan:', e);
- return buildAnalysis(input);
- });
+ return analysisWorker;
  } catch (e) {
  analysisWorkerBroken = true;
- return Promise.resolve(buildAnalysis(input));
+ return null;
  }
+ }
+
+ function workerRequest(payload, onProgress) {
+ var worker = ensureAnalysisWorker();
+ if (!worker) return Promise.reject(new Error('worker unavailable'));
+ return new Promise(function (resolve, reject) {
+ var id = ++analysisWorkerMsgSeq;
+ analysisWorkerPending.set(id, { resolve: resolve, reject: reject, onProgress: onProgress });
+ worker.postMessage(Object.assign({ id: id }, payload));
+ });
  }
 
  function analysisCellM() {
@@ -1740,6 +1760,24 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
 
  async function buildAnalysisForBounds(bounds, cellM) {
  var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
+ if (!analysisWorkerBroken) {
+ try {
+ var res = await workerRequest({
+ type: 'build',
+ west: snap.west, south: snap.south, east: snap.east, north: snap.north,
+ cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
+ wind: currentWind, windKey: windAnalysisKey()
+ }, function (p) {
+ if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
+ });
+ if (res.reason === 'toowide') return null;
+ if (res.result) res.result.reqCellM = snap.cellM;
+ return res.result;
+ } catch (e) {
+ console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
+ }
+ }
+ // fallback: koko putki karttasaikeessa jos worker ei kaynnisty
  var snapBounds = L.latLngBounds([snap.south, snap.west], [snap.north, snap.east]);
  var keys = depthTileKeysForBounds(snapBounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) return null;
@@ -1750,7 +1788,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
  (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
  });
- var a = await buildAnalysisInWorker({
+ var a = buildAnalysis({
  contours: Array.from(contourById.values()),
  bands: Array.from(bandById.values()),
  wind: currentWind,

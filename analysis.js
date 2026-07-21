@@ -328,9 +328,11 @@ export function buildAnalysis(input) {
   var wPref = weights.depthPref;
   var wSum = wSlope + wWind + wPref;
   var hasAny = false;
+  // karkeammassa ruudukossa gradientti laimenee; skaalataan kynnys solukoon mukaan
+  var slopeNormEff = weights.slopeNormPerMeter * Math.min(1, Math.sqrt(50 / cellM));
   for (idx = 0; idx < nx * ny; idx++) {
     if (!mask[idx]) continue;
-    var slopeN = Math.min(1, slope[idx] / weights.slopeNormPerMeter);
+    var slopeN = Math.min(1, slope[idx] / slopeNormEff);
     slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.8) / 1.7));
     var pref = depthPreference(depth[idx]);
     var s = (wSlope * slopeN + wWind * windExp[idx] * windScale + wPref * pref) / wSum;
