@@ -47,8 +47,8 @@ export async function openBathy3d(analysis, opts) {
     '<button data-act="follow" style="flex:0 0 auto;background:#163244;color:#d8e6ea;border:1px solid #234a5f;border-radius:8px;padding:7px 12px;font-size:12px;">Seuraa</button>' +
     '<button data-act="sim" title="Testivene näkymän keskelle, raahaus kääntää" style="flex:0 0 auto;background:#163244;color:#d8e6ea;border:1px solid #234a5f;border-radius:8px;padding:7px 12px;font-size:12px;">Testivene</button>' +
     '<span>Korostus</span>' +
-    '<input data-act="ex" type="range" min="1" max="10" step="0.5" value="4" style="flex:1;min-width:0;accent-color:#e8a13c;">' +
-    '<span data-role="ex-val" class="mono" style="color:#d8e6ea;">4×</span>' +
+    '<input data-act="ex" type="range" min="1" max="10" step="0.5" value="8" style="flex:1;min-width:0;accent-color:#e8a13c;">' +
+    '<span data-role="ex-val" class="mono" style="color:#d8e6ea;">8×</span>' +
     '</div>';
   document.body.appendChild(overlay);
   overlay.querySelector('[data-role="title"]').textContent = opts.title || '3D-syvyysnäkymä';
@@ -80,7 +80,7 @@ export async function openBathy3d(analysis, opts) {
   var centerLat = 0, centerLon = 0, mPerLat = 111320, mPerLon = 1;
   var widthM = 1, heightM = 1, maxDepth = 1;
   var geo = null, mesh = null, mat = null, waterGeo = null, water = null;
-  var exaggeration = 4;
+  var exaggeration = opts.exaggeration >= 1 && opts.exaggeration <= 10 ? opts.exaggeration : 8;
 
   var mainMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
   var waterMat = new THREE.MeshBasicMaterial({ color: 0x1769aa, transparent: true, opacity: 0.07, depthWrite: false });
@@ -319,10 +319,13 @@ export async function openBathy3d(analysis, opts) {
   }
   simBtn.addEventListener('click', function () { setSim(!simActive); });
 
+  exInput.value = String(exaggeration);
+  exVal.textContent = exaggeration + '×';
   exInput.addEventListener('input', function () {
-    exaggeration = parseFloat(exInput.value) || 4;
+    exaggeration = parseFloat(exInput.value) || 8;
     exVal.textContent = exaggeration + '×';
     applyExaggeration();
+    if (opts.onExaggeration) opts.onExaggeration(exaggeration);
   });
 
   function resize() {

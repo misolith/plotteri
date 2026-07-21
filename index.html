@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems; worker-src 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee; worker-src 'self';">
 <meta name="theme-color" content="#05141c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Plotteri">
@@ -1053,11 +1053,18 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  poiVisibility: defaultPoiVisibility,
  radarVisible: true,
  indexVisible: false,
+ baseLayer: null,
+ sykeVisible: true,
+ vesijarviVisible: false,
+ exaggeration3d: 8,
  tileCache: defaultTileCache
  });
  settings.poiVisibility = Object.assign({}, defaultPoiVisibility, settings.poiVisibility || {});
  if (settings.radarVisible == null) settings.radarVisible = true;
  if (settings.indexVisible == null) settings.indexVisible = false;
+ if (settings.sykeVisible == null) settings.sykeVisible = true;
+ if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
+ if (!(settings.exaggeration3d >= 1 && settings.exaggeration3d <= 10)) settings.exaggeration3d = 8;
  settings.tileCache = Object.assign({}, defaultTileCache, settings.tileCache || {});
  var tracks = await loadJSON('tracks', []);
  var waypoints = await loadJSON('waypoints', []);
@@ -1193,17 +1200,38 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  'https://overpass-api.de/api/interpreter',
  'https://lz4.overpass-api.de/api/interpreter',
  'https://z.overpass-api.de/api/interpreter',
- 'https://overpass.kumi.systems/api/interpreter'
+ 'https://overpass.kumi.systems/api/interpreter',
+ 'https://overpass.private.coffee/api/interpreter'
  ];
+ var poiFailNotified = false;
  var poiLoadedKey = null;
  var poiFetchTimer = null;
  var poiFetchSeq = 0;
  var vesijarviDepthLoaded = false;
 
- (settings.apiKey ? mmlLayer : osmLayer).addTo(map);
- sykeDepthLayer.addTo(map);
+ var baseLayerByName = { mml: mmlLayer, osm: osmLayer, traficom: traficomChartLayer };
+ var initialBase = baseLayerByName[settings.baseLayer] || (settings.apiKey ? mmlLayer : osmLayer);
+ if (initialBase === mmlLayer && !settings.apiKey) initialBase = osmLayer;
+ initialBase.addTo(map);
+ if (settings.sykeVisible !== false) sykeDepthLayer.addTo(map);
+ if (settings.vesijarviVisible) {
+ vesijarviDepthLayer.addTo(map);
+ loadVesijarviDepthLayer();
+ }
  if (settings.radarVisible !== false) rainRadarLayer.addTo(map);
  if (settings.indexVisible) fishIndexLayer.addTo(map);
+
+ map.on('baselayerchange', function (e) {
+ settings.baseLayer = e.layer === mmlLayer ? 'mml' : e.layer === traficomChartLayer ? 'traficom' : 'osm';
+ saveJSON('settings', settings);
+ });
+ map.on('overlayadd overlayremove', function (e) {
+ var visible = e.type === 'overlayadd';
+ if (e.layer === sykeDepthLayer) settings.sykeVisible = visible;
+ else if (e.layer === vesijarviDepthLayer) settings.vesijarviVisible = visible;
+ else return;
+ saveJSON('settings', settings);
+ });
  Object.keys(poiLayers).forEach(function (key) {
  if (settings.poiVisibility[key] !== false) poiLayers[key].addTo(map);
  });
@@ -1362,9 +1390,11 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var controller = window.AbortController ? new AbortController() : null;
  var timeout = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
  try {
- var url = poiOverpassEndpoints[i] + '?data=' + encodeURIComponent(query);
- var res = await fetch(url, {
+ var res = await fetch(poiOverpassEndpoints[i], {
+ method: 'POST',
  cache: 'no-store',
+ headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+ body: 'data=' + encodeURIComponent(query),
  signal: controller ? controller.signal : undefined
  });
  if (!res.ok) throw new Error('overpass status ' + res.status);
@@ -1396,11 +1426,35 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  if (cacheKey === poiLoadedKey) return;
  poiLoadedKey = cacheKey;
  var fetchSeq = ++poiFetchSeq;
+ var storeKey = 'poicache:v1:' + cacheKey;
  try {
+ var cached = await loadJSON(storeKey, null);
+ if (cached && cached.t && Date.now() - cached.t < 24 * 3600 * 1000) {
+ if (fetchSeq !== poiFetchSeq) return;
+ renderPoiElements(cached.elements);
+ return;
+ }
  var data = await fetchPoiData(bounds);
  if (fetchSeq !== poiFetchSeq) return;
+ renderPoiElements(data.elements);
+ saveJSON(storeKey, { t: Date.now(), elements: data.elements || [] }).then(trimPoiCache);
+ } catch (e) {
+ if (e.name === 'AbortError') return;
+ console.warn('OSM-kohteiden lataus epaonnistui:', e);
+ var stale = await loadJSON(storeKey, null);
+ if (fetchSeq !== poiFetchSeq) return;
+ if (stale && stale.elements) {
+ renderPoiElements(stale.elements);
+ } else if (!poiFailNotified) {
+ poiFailNotified = true;
+ showToast('Karttakohteiden haku (Overpass) ei onnistu juuri nyt');
+ }
+ }
+ }
+
+ function renderPoiElements(elements) {
  Object.keys(poiLayers).forEach(function (key) { poiLayers[key].clearLayers(); });
- (data.elements || []).forEach(function (el) {
+ (elements || []).forEach(function (el) {
  var lat = el.lat || (el.center && el.center.lat);
  var lon = el.lon || (el.center && el.center.lon);
  var kind = poiKind(el.tags);
@@ -1409,9 +1463,6 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  .bindPopup(poiPopupHtml(kind, el.tags || {}))
  .addTo(poiLayers[kind]);
  });
- } catch (e) {
- if (e.name !== 'AbortError') console.warn('OSM-kohteiden lataus epaonnistui:', e);
- }
  }
 
  poiToggleInputs.forEach(function (input) {
@@ -1558,7 +1609,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  return results;
  }
 
- async function listDepthCacheEntries() {
+ async function listKvEntries(prefix) {
  var db = await openAppDb();
  return await new Promise(function (resolve, reject) {
  var out = [];
@@ -1568,13 +1619,31 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var cur = req.result;
  if (!cur) return resolve(out);
  var rec = cur.value;
- if (rec && typeof rec.key === 'string' && rec.key.indexOf(DEPTH_KEY_PREFIX) === 0) {
+ if (rec && typeof rec.key === 'string' && rec.key.indexOf(prefix) === 0) {
  out.push({ key: rec.key, updated: rec.updated || 0, size: rec.value ? String(rec.value).length : 0 });
  }
  cur.continue();
  };
  req.onerror = function () { reject(req.error); };
  });
+ }
+
+ function listDepthCacheEntries() {
+ return listKvEntries(DEPTH_KEY_PREFIX);
+ }
+
+ var POI_CACHE_MAX_ENTRIES = 60;
+ var lastPoiTrimAt = 0;
+ async function trimPoiCache() {
+ if (Date.now() - lastPoiTrimAt < 60000) return;
+ lastPoiTrimAt = Date.now();
+ try {
+ var entries = await listKvEntries('poicache:v1:');
+ if (entries.length <= POI_CACHE_MAX_ENTRIES) return;
+ entries.sort(function (a, b) { return a.updated - b.updated; });
+ var remove = entries.slice(0, entries.length - POI_CACHE_MAX_ENTRIES);
+ for (var i = 0; i < remove.length; i++) await idbDelete(remove[i].key);
+ } catch (e) { /* trimmaus on best effort */ }
  }
 
  async function trimDepthCache() {
@@ -1914,6 +1983,11 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  panel.classList.add('hidden');
  view3dHandle = await mod.openBathy3d(a, {
  title: '3D-syvyysnäkymä',
+ exaggeration: settings.exaggeration3d,
+ onExaggeration: function (value) {
+ settings.exaggeration3d = value;
+ saveJSON('settings', settings);
+ },
  onClose: function () { view3dHandle = null; },
  onNearEdge: rebuild3dAround
  });
