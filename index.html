@@ -4,7 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems; worker-src 'self';">
+<meta name="theme-color" content="#05141c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Plotteri">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Kalastusplotteri</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
 <style>
  * { box-sizing: border-box; }
@@ -400,36 +407,106 @@
 
  var TRANSPARENT_PX = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
- // ---------- storage helpers (window.storage with localStorage fallback) ----------
+ // ---------- storage helpers (IndexedDB with localStorage migration fallback) ----------
+ var APP_DB_NAME = 'kalastusplotteri-app';
+ var APP_DB_VERSION = 1;
+ var APP_STORE = 'kv';
+ var appDbPromise = null;
+
+ function openAppDb() {
+ if (!('indexedDB' in window)) return Promise.reject(new Error('IndexedDB unsupported'));
+ if (!appDbPromise) {
+ appDbPromise = new Promise(function (resolve, reject) {
+ var req = indexedDB.open(APP_DB_NAME, APP_DB_VERSION);
+ req.onupgradeneeded = function () {
+ var db = req.result;
+ if (!db.objectStoreNames.contains(APP_STORE)) db.createObjectStore(APP_STORE, { keyPath: 'key' });
+ };
+ req.onsuccess = function () { resolve(req.result); };
+ req.onerror = function () { reject(req.error); };
+ });
+ }
+ return appDbPromise;
+ }
+
+ async function idbGet(key) {
+ var db = await openAppDb();
+ return await new Promise(function (resolve, reject) {
+ var tx = db.transaction(APP_STORE, 'readonly');
+ var req = tx.objectStore(APP_STORE).get(key);
+ req.onsuccess = function () { resolve(req.result ? req.result.value : null); };
+ req.onerror = function () { reject(req.error); };
+ });
+ }
+
+ async function idbSet(key, value) {
+ var db = await openAppDb();
+ return await new Promise(function (resolve, reject) {
+ var tx = db.transaction(APP_STORE, 'readwrite');
+ tx.objectStore(APP_STORE).put({ key: key, value: value, updated: Date.now() });
+ tx.oncomplete = function () { resolve(); };
+ tx.onerror = function () { reject(tx.error); };
+ });
+ }
+
+ async function idbDelete(key) {
+ var db = await openAppDb();
+ return await new Promise(function (resolve, reject) {
+ var tx = db.transaction(APP_STORE, 'readwrite');
+ tx.objectStore(APP_STORE).delete(key);
+ tx.oncomplete = function () { resolve(); };
+ tx.onerror = function () { reject(tx.error); };
+ });
+ }
+
  async function loadJSON(key, fallback) {
  try {
+ try {
+ var idbValue = await idbGet(key);
+ if (idbValue != null) return JSON.parse(idbValue);
+ } catch (idbError) { /* fall through to legacy storage */ }
+ var localValue = window.localStorage ? window.localStorage.getItem('kalastusplotteri:' + key) : null;
+ if (localValue) {
+ try {
+ await idbSet(key, localValue);
+ } catch (idbError) { /* IndexedDB may be unavailable in private mode */ }
+ return JSON.parse(localValue);
+ }
  if (window.storage && window.storage.get) {
  var res = await window.storage.get(key, false);
- return res ? JSON.parse(res.value) : fallback;
+ if (res) {
+ try {
+ await idbSet(key, res.value);
+ } catch (idbError) { /* keep using external storage */ }
+ return JSON.parse(res.value);
  }
- var localValue = window.localStorage ? window.localStorage.getItem('kalastusplotteri:' + key) : null;
- return localValue ? JSON.parse(localValue) : fallback;
+ }
+ return fallback;
  } catch (e) {
  return fallback;
  }
  }
  async function saveJSON(key, value) {
  try {
- if (window.storage && window.storage.set) {
- await window.storage.set(key, JSON.stringify(value), false);
- } else if (window.localStorage) {
- window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
- }
+ var serialized = JSON.stringify(value);
+ await idbSet(key, serialized);
+ if (window.localStorage && key === 'settings') window.localStorage.setItem('kalastusplotteri:' + key, serialized);
  return true;
  } catch (e) {
+ try {
+ if (window.localStorage) window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
+ } catch (fallbackError) { /* no writable storage available */ }
  console.error('Tallennus epaonnistui:', key, e);
  return false;
  }
  }
  async function deleteKey(key) {
  try {
+ await idbDelete(key);
+ } catch (e) { /* key did not exist or IndexedDB is unavailable */ }
+ try {
+ if (window.localStorage) window.localStorage.removeItem('kalastusplotteri:' + key);
  if (window.storage && window.storage.delete) await window.storage.delete(key, false);
- else if (window.localStorage) window.localStorage.removeItem('kalastusplotteri:' + key);
  } catch (e) { /* key did not exist, ignore */ }
  }
 
@@ -451,6 +528,61 @@
 
  function formatSpeed(speedKmh) {
  return speedKmh != null && isFinite(speedKmh) ? speedKmh.toFixed(1) + ' km/h' : '-- km/h';
+ }
+
+ function trackSpeedColor(speedKmh) {
+ if (speedKmh == null || !isFinite(speedKmh)) return '#9fc0ca';
+ if (speedKmh < 1.2) return '#6f8e99';
+ if (speedKmh < 2.2) return '#2dd4bf';
+ if (speedKmh < 4.5) return '#7ddf64';
+ if (speedKmh < 7.0) return '#e8a13c';
+ return '#d1503a';
+ }
+
+ function segmentSpeedKmh(a, b) {
+ var speed = b && b.speedKmh != null ? Number(b.speedKmh) : NaN;
+ if (!isNaN(speed) && isFinite(speed)) return speed;
+ speed = a && a.speedKmh != null ? Number(a.speedKmh) : NaN;
+ return !isNaN(speed) && isFinite(speed) ? speed : null;
+ }
+
+ function makeSpeedTrackLayer(points, options) {
+ var group = L.layerGroup();
+ var opts = Object.assign({ weight: 3, opacity: 0.9 }, options || {});
+ for (var i = 1; i < points.length; i++) {
+ var a = points[i - 1];
+ var b = points[i];
+ L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+ color: trackSpeedColor(segmentSpeedKmh(a, b)),
+ weight: opts.weight,
+ opacity: opts.opacity,
+ lineCap: 'round',
+ lineJoin: 'round'
+ }).addTo(group);
+ }
+ if (points.length === 1) {
+ L.circleMarker([points[0].lat, points[0].lon], {
+ radius: 3,
+ color: trackSpeedColor(points[0].speedKmh),
+ fillColor: trackSpeedColor(points[0].speedKmh),
+ fillOpacity: opts.opacity,
+ weight: 1
+ }).addTo(group);
+ }
+ return group;
+ }
+
+ function addSpeedTrackSegment(group, points, options) {
+ if (!group || points.length < 2) return;
+ var a = points[points.length - 2];
+ var b = points[points.length - 1];
+ L.polyline([[a.lat, a.lon], [b.lat, b.lon]], {
+ color: trackSpeedColor(segmentSpeedKmh(a, b)),
+ weight: (options && options.weight) || 3,
+ opacity: (options && options.opacity) || 0.9,
+ lineCap: 'round',
+ lineJoin: 'round'
+ }).addTo(group);
  }
 
  function gpsSpeedKmh(pos, previousPos, now) {
@@ -512,7 +644,7 @@
 
  // ---------- state ----------
  var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true };
- var defaultTileCache = { enabled: true, maxTiles: 1200, ttlDays: 7 };
+ var defaultTileCache = { enabled: true, maxTiles: 600, ttlDays: 7 };
  var municipalityNames = {
  '5': 'Alajärvi',
  '9': 'Alavieska',
@@ -852,7 +984,7 @@
  var recordPoints = [];
  var recordTimerHandle = null;
  var firstFix = true;
- var activeTrackLine = null;
+ var activeTrackLayer = null;
  var modalTarget = null;
  var markPlacementMode = false;
  var placeSearchMarker = null;
@@ -997,13 +1129,7 @@
  L.control.zoom({ position: 'bottomright' }).addTo(map);
  L.control.scale({ position: 'bottomleft', metric: true, imperial: false }).addTo(map);
 
- async function loadVesijarviDepthLayer() {
- if (vesijarviDepthLoaded) return;
- vesijarviDepthLoaded = true;
- try {
- var res = await fetch('https://biwatech.com/vj3/kohteet/bathymetries/1');
- if (!res.ok) throw new Error('HTTP ' + res.status);
- var source = await res.json();
+ function normalizeVesijarviDepthSource(source) {
  var depths = String(source.properties && source.properties.syvyydet || '').split(/\s+/).map(function (v) { return parseFloat(v); });
  var polygons = source.geometry && source.geometry.type === 'MultiPolygon' ? source.geometry.coordinates : [];
  var features = polygons.map(function (polygon, index) {
@@ -1013,7 +1139,24 @@
  geometry: { type: 'Polygon', coordinates: polygon }
  };
  });
- vesijarviDepthLayer.addData({ type: 'FeatureCollection', features: features });
+ return { type: 'FeatureCollection', features: features };
+ }
+
+ async function loadVesijarviDepthLayer() {
+ if (vesijarviDepthLoaded) return;
+ vesijarviDepthLoaded = true;
+ try {
+ var cached = await loadJSON('vesijarvi_depth_v1', null);
+ if (cached && cached.type === 'FeatureCollection') {
+ vesijarviDepthLayer.addData(cached);
+ return;
+ }
+ var res = await fetch('https://biwatech.com/vj3/kohteet/bathymetries/1');
+ if (!res.ok) throw new Error('HTTP ' + res.status);
+ var source = await res.json();
+ var featureCollection = normalizeVesijarviDepthSource(source);
+ vesijarviDepthLayer.addData(featureCollection);
+ await saveJSON('vesijarvi_depth_v1', featureCollection);
  } catch (e) {
  vesijarviDepthLoaded = false;
  console.warn('Vesijarven syvyysalueiden lataus epaonnistui:', e);
@@ -1387,7 +1530,7 @@
  if (dist < 5 && dt < 5) return;
  }
  recordPoints.push({ lat: lat, lon: lon, t: now, speedKmh: currentSpeedKmh });
- activeTrackLine.addLatLng([lat, lon]);
+ addSpeedTrackSegment(activeTrackLayer, recordPoints, { weight: 4, opacity: 0.95 });
  if (recordPoints.length % 10 === 0) checkpointActiveTrack();
  }
 
@@ -1410,7 +1553,7 @@
  clearInterval(recordTimerHandle);
  recIndicator.classList.add('hidden');
  btnRecord.classList.remove('active');
- if (activeTrackLine) { map.removeLayer(activeTrackLine); activeTrackLine = null; }
+ if (activeTrackLayer) { map.removeLayer(activeTrackLayer); activeTrackLayer = null; }
  if (recordPoints.length > 1) {
  var track = {
  id: 'trk_' + recordStart,
@@ -1433,7 +1576,7 @@
  recordStart = Date.now();
  recordPoints = [];
  if (currentPos) recordPoints.push({ lat: currentPos.lat, lon: currentPos.lon, t: recordStart, speedKmh: currentSpeedKmh });
- activeTrackLine = L.polyline(recordPoints.map(function (p) { return [p.lat, p.lon]; }), { color: '#e8a13c', weight: 3 }).addTo(map);
+ activeTrackLayer = makeSpeedTrackLayer(recordPoints, { weight: 4, opacity: 0.95 }).addTo(map);
  recIndicator.classList.remove('hidden');
  updateRecTimer();
  recordTimerHandle = setInterval(updateRecTimer, 1000);
@@ -1702,7 +1845,7 @@
  async function applyTileCacheSettings() {
  settings.tileCache = {
  enabled: !!tileCacheEnabled.checked,
- maxTiles: Math.max(100, Math.min(5000, parseInt(tileCacheMax.value, 10) || 1200)),
+ maxTiles: Math.max(100, Math.min(5000, parseInt(tileCacheMax.value, 10) || 600)),
  ttlDays: Math.max(1, Math.min(30, parseInt(tileCacheDays.value, 10) || 7))
  };
  tileCacheMax.value = settings.tileCache.maxTiles;
@@ -1751,7 +1894,7 @@
  trackListEl.appendChild(li);
 
  if (!trk._line) {
- trk._line = L.polyline(trk.points.map(function (p) { return [p.lat, p.lon]; }), { color: '#5fa8c9', weight: 2, opacity: 0.85 });
+ trk._line = makeSpeedTrackLayer(trk.points, { weight: 3, opacity: 0.85 });
  }
  trk._line.addTo(map);
  });

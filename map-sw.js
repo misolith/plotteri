@@ -4,7 +4,7 @@ const DB_NAME = 'kalastusplotteri-cache-meta';
 const DB_VERSION = 1;
 const META_STORE = 'tiles';
 
-let config = { enabled: false, maxTiles: 1200, ttlDays: 7 };
+let config = { enabled: false, maxTiles: 600, ttlDays: 7 };
 
 const TILE_HOSTS = new Set([
   'tile.openstreetmap.org',
@@ -49,7 +49,7 @@ async function handleMessage(message) {
     const next = message.config || {};
     config = {
       enabled: !!next.enabled,
-      maxTiles: clamp(parseInt(next.maxTiles, 10) || 1200, 100, 5000),
+      maxTiles: clamp(parseInt(next.maxTiles, 10) || 600, 100, 5000),
       ttlDays: clamp(parseInt(next.ttlDays, 10) || 7, 1, 30)
     };
     await pruneCache();

@@ -1,0 +1,19 @@
+{
+  "name": "Kalastusplotteri",
+  "short_name": "Plotteri",
+  "description": "Kalastusplotteri kartalla, reiteilla, kalapaikoilla ja saakerroksilla.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#05141c",
+  "theme_color": "#05141c",
+  "icons": [
+    {
+      "src": "icons/plotteri-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
