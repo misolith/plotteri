@@ -1642,9 +1642,9 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
 
  function indexColor(s) {
  var t = Math.max(0, Math.min(1, (s - SCORE_WEIGHTS.minScoreToShow) / (1 - SCORE_WEIGHTS.minScoreToShow)));
- var teal = [45, 212, 191], amber = [232, 161, 60], red = [209, 80, 58];
- var rgb = t < 0.5 ? lerpColor(teal, amber, t * 2) : lerpColor(amber, red, (t - 0.5) * 2);
- return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.18 + 0.42 * t))];
+ var lime = [196, 240, 66], amber = [240, 152, 40], red = [222, 56, 40];
+ var rgb = t < 0.5 ? lerpColor(lime, amber, t * 2) : lerpColor(amber, red, (t - 0.5) * 2);
+ return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.35 + 0.45 * t))];
  }
 
  function drawIndexOverlay(a) {
@@ -1672,13 +1672,76 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  indexOverlay.setUrl(url);
  indexOverlay.setBounds(overlayBounds);
  } else {
- indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.85, interactive: false });
+ indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false });
  indexOverlay.addTo(fishIndexLayer);
  }
  }
 
- async function buildAnalysisForBounds(bounds) {
- var keys = depthTileKeysForBounds(bounds);
+ // ---------- analyysilaskenta workerissa, ruudukko ankkuroitu maailmaan ----------
+ var analysisWorker = null;
+ var analysisWorkerBroken = false;
+ var analysisWorkerMsgSeq = 0;
+ var analysisWorkerPending = new Map();
+
+ function buildAnalysisInWorker(input) {
+ if (analysisWorkerBroken || typeof Worker === 'undefined') {
+ return Promise.resolve(buildAnalysis(input));
+ }
+ try {
+ if (!analysisWorker) {
+ analysisWorker = new Worker('analysis-worker.js', { type: 'module' });
+ analysisWorker.onmessage = function (e) {
+ var msg = e.data || {};
+ var pending = analysisWorkerPending.get(msg.id);
+ if (!pending) return;
+ analysisWorkerPending.delete(msg.id);
+ if (msg.error) pending.reject(new Error(msg.error));
+ else pending.resolve(msg.result);
+ };
+ analysisWorker.onerror = function (err) {
+ analysisWorkerBroken = true;
+ analysisWorkerPending.forEach(function (p) { p.reject(err instanceof Error ? err : new Error('worker error')); });
+ analysisWorkerPending.clear();
+ };
+ }
+ return new Promise(function (resolve, reject) {
+ var id = ++analysisWorkerMsgSeq;
+ analysisWorkerPending.set(id, { resolve: resolve, reject: reject });
+ analysisWorker.postMessage({ id: id, input: input });
+ }).catch(function (e) {
+ console.warn('Analyysiworker epäonnistui, lasketaan suoraan:', e);
+ return buildAnalysis(input);
+ });
+ } catch (e) {
+ analysisWorkerBroken = true;
+ return Promise.resolve(buildAnalysis(input));
+ }
+ }
+
+ function analysisCellM() {
+ var z = map.getZoom();
+ return z >= 14 ? 50 : z >= 13 ? 100 : 200;
+ }
+
+ var ANALYSIS_ANCHOR_LAT = 62;
+ function snapAnalysisBounds(bounds, cellM) {
+ var cellLat = cellM / 111320;
+ var cellLon = cellM / (111320 * Math.cos(ANALYSIS_ANCHOR_LAT * Math.PI / 180));
+ return {
+ west: Math.floor(bounds.getWest() / cellLon) * cellLon,
+ east: Math.ceil(bounds.getEast() / cellLon) * cellLon,
+ south: Math.floor(bounds.getSouth() / cellLat) * cellLat,
+ north: Math.ceil(bounds.getNorth() / cellLat) * cellLat,
+ cellLon: cellLon,
+ cellLat: cellLat,
+ cellM: cellM
+ };
+ }
+
+ async function buildAnalysisForBounds(bounds, cellM) {
+ var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
+ var snapBounds = L.latLngBounds([snap.south, snap.west], [snap.north, snap.east]);
+ var keys = depthTileKeysForBounds(snapBounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) return null;
  var tiles = await ensureDepthTiles(keys);
  var contourById = new Map();
@@ -1687,15 +1750,35 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
  (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
  });
- return buildAnalysis({
+ var a = await buildAnalysisInWorker({
  contours: Array.from(contourById.values()),
  bands: Array.from(bandById.values()),
  wind: currentWind,
- west: bounds.getWest(),
- south: bounds.getSouth(),
- east: bounds.getEast(),
- north: bounds.getNorth()
+ west: snap.west,
+ south: snap.south,
+ east: snap.east,
+ north: snap.north,
+ cellLonDeg: snap.cellLon,
+ cellLatDeg: snap.cellLat
  });
+ if (a) a.reqCellM = snap.cellM;
+ return a;
+ }
+
+ function windAnalysisKey() {
+ return currentWind ? Math.round(currentWind.direction / 15) + ':' + Math.round(currentWind.speed) : 'none';
+ }
+ var lastAnalysisWindKey = null;
+
+ function analysisCoversView() {
+ if (!lastAnalysis) return false;
+ var vb = map.getBounds();
+ var marginLon = (lastAnalysis.east - lastAnalysis.west) * 0.05;
+ var marginLat = (lastAnalysis.north - lastAnalysis.south) * 0.05;
+ return vb.getWest() >= lastAnalysis.west + marginLon &&
+ vb.getEast() <= lastAnalysis.east - marginLon &&
+ vb.getSouth() >= lastAnalysis.south + marginLat &&
+ vb.getNorth() <= lastAnalysis.north - marginLat;
  }
 
  async function runDepthWork(force) {
@@ -1706,7 +1789,11 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  setDepthStatus('Lähennä järvelle (zoom 12+), niin indeksi lasketaan.');
  return null;
  }
- var bounds = map.getBounds().pad(0.15);
+ if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
+ lastAnalysisWindKey === windAnalysisKey() && analysisCoversView()) {
+ return lastAnalysis.hasData ? lastAnalysis : null;
+ }
+ var bounds = map.getBounds().pad(0.2);
  var keys = depthTileKeysForBounds(bounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
  setDepthStatus('Näkymä liian laaja syvyysanalyysiin, lähennä lisää.');
@@ -1717,6 +1804,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  var a = await buildAnalysisForBounds(bounds);
  if (seq !== depthBuildSeq) return null;
  lastAnalysis = a;
+ lastAnalysisWindKey = windAnalysisKey();
  if (!a || !a.hasData) {
  clearIndexOverlay();
  setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE kattaa vain luodatut järvet).');
@@ -1758,7 +1846,7 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  [lat - dLat / 2, lon - dLon / 2],
  [lat + dLat / 2, lon + dLon / 2]
  );
- var a = await buildAnalysisForBounds(bounds);
+ var a = await buildAnalysisForBounds(bounds, lastAnalysis.reqCellM);
  if (a && a.hasData && view3dHandle) {
  lastAnalysis = a;
  view3dHandle.setAnalysis(a);
@@ -2608,7 +2696,8 @@ import { wgs84ToTm35, parseContours, parseBands, buildAnalysis, dayScore, pressu
  open3d: open3d,
  getAnalysis: function () { return lastAnalysis; },
  getDayScore: function () { return lastDayScore; },
- get3d: function () { return view3dHandle; }
+ get3d: function () { return view3dHandle; },
+ getBuildSeq: function () { return depthBuildSeq; }
  };
  setTimeout(function () {
  if (!lastDayScore) {

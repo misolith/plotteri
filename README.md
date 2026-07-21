@@ -90,6 +90,7 @@ Käytä paikallista web-palvelinta suoran `index.html`-avauksen sijaan, koska se
 ```text
 index.html              Pääsovellus
 analysis.js             Kalapaikka-analyysin laskenta (syvyysruudukko, gradientti, tuulialtistus, päiväkerroin)
+analysis-worker.js      Web Worker, joka ajaa analyysilaskennan pois karttasäikeestä
 view3d.js               Järven 3D-syvyysnäkymä (lazy-ladattava)
 map-sw.js               Service worker katsottujen tilejen cachelle
 manifest.json           PWA-manifesti
@@ -110,6 +111,7 @@ Julkaisukohde odottaa näitä staattisia tiedostoja sellaisenaan:
 
 - `index.html`
 - `analysis.js`
+- `analysis-worker.js`
 - `view3d.js`
 - `map-sw.js`
 - `manifest.json`

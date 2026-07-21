@@ -142,11 +142,22 @@ export function buildAnalysis(input) {
   var heightM = (north - south) * mPerLat;
   if (widthM <= 0 || heightM <= 0) return null;
 
-  var cellM = Math.max(targetCellM, widthM / maxCells, heightM / maxCells);
-  var nx = Math.max(8, Math.round(widthM / cellM));
-  var ny = Math.max(8, Math.round(heightM / cellM));
-  var cellLon = (east - west) / nx;
-  var cellLat = (north - south) / ny;
+  var nx, ny, cellLon, cellLat, cellM;
+  if (input.cellLonDeg && input.cellLatDeg) {
+    // maailmaan ankkuroitu ruudukko: solurajat kiinteita, kuvio ei muutu panoroidessa
+    cellLon = input.cellLonDeg;
+    cellLat = input.cellLatDeg;
+    nx = Math.max(8, Math.round((east - west) / cellLon));
+    ny = Math.max(8, Math.round((north - south) / cellLat));
+    if (nx * ny > (input.maxCellsTotal || 120000)) return null;
+    cellM = (cellLat * mPerLat + cellLon * mPerLon) / 2;
+  } else {
+    cellM = Math.max(targetCellM, widthM / maxCells, heightM / maxCells);
+    nx = Math.max(8, Math.round(widthM / cellM));
+    ny = Math.max(8, Math.round(heightM / cellM));
+    cellLon = (east - west) / nx;
+    cellLat = (north - south) / ny;
+  }
 
   // 1) syvyyspisteet kayravertekseista
   var points = [];
@@ -320,6 +331,7 @@ export function buildAnalysis(input) {
   for (idx = 0; idx < nx * ny; idx++) {
     if (!mask[idx]) continue;
     var slopeN = Math.min(1, slope[idx] / weights.slopeNormPerMeter);
+    slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.8) / 1.7));
     var pref = depthPreference(depth[idx]);
     var s = (wSlope * slopeN + wWind * windExp[idx] * windScale + wPref * pref) / wSum;
     score[idx] = s;
