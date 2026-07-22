@@ -7,7 +7,7 @@ Tuotanto: https://lith.fi/map/
 ## Ominaisuudet
 
 - Leaflet-kartta MML:n maastokartalla, OpenStreetMapilla, Traficomin merikartalla ja SYKE:n syvyyskerroksilla.
-- GPS-seuranta nopeudella, suunnalla, tarkkuudella, wake lockilla ja reitin tallennuksella.
+- GPS-seuranta nopeudella, suunnalla, tarkkuudella, näytön hereilläpidolla ja reitin tallennuksella.
 - Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella. Reitit näkyvät kartalla oletuksena omana layerinään.
 - Reittien ja kalapaikkojen GeoJSON-vienti ja -tuonti laitteelta toiselle siirtymistä varten.
 - Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
@@ -19,7 +19,7 @@ Tuotanto: https://lith.fi/map/
 - FMI:n sadetutka karttaoverlaynä.
 - Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
 - Selaimen tile-cache vain oikeasti katsotuille karttatileille, rajatulla tilemäärällä ja säilytysajalla.
-- PWA-manifesti ja ikoni kotinäyttöasennusta varten.
+- PWA-manifesti, ikoni ja asetuspaneelin asennusnappi kotinäyttöasennusta varten.
 
 ## Kalapaikka-analyysi
 
@@ -70,6 +70,8 @@ Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 - Reitit, kalapaikat, asetukset ja välimuistiin tallennettu Vesijärvi-data ovat selaimen IndexedDB:ssä.
 - Asetuksia peilataan tarvittaessa localStorageen yhteensopivuuden vuoksi.
 - MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön.
+- Näytön hereilläpito käyttää selaimen Screen Wake Lock API:a, jos PWA/selaintila tukee sitä. Lukko vapautuu automaattisesti, jos appi ei ole näkyvissä.
+- Sovelluksen asennusnappi käyttää selaimen `beforeinstallprompt`-tapahtumaa, kun se on saatavilla. iOS näyttää käyttäjälle ohjeen käyttää Jakaminen-valikon Lisää Koti-valikkoon -toimintoa.
 - Säähaut lähettävät Open-Meteolle pyöristetyn sijainnin.
 - Tile-cache tallentaa vain ne karttatiilet, joita käyttäjä on oikeasti katsonut.
 - Syvyystiilet cachetetaan IndexedDB:hen rajatulla määrällä ja säilytysajalla.

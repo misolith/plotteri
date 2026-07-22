@@ -367,6 +367,23 @@
  </section>
 
  <section>
+ <h3>Ajon aikana</h3>
+ <label class="settings-row">
+ <span>Pidä näyttö hereillä</span>
+ <input id="wake-lock-toggle" type="checkbox" checked>
+ </label>
+ <p id="wake-lock-status" class="hint">Näytön hereilläpito aktivoituu, kun selain sallii sen.</p>
+ </section>
+
+ <section>
+ <h3>Sovellus</h3>
+ <div class="cache-actions">
+ <button id="install-app-btn">Asenna appi</button>
+ </div>
+ <p id="install-app-status" class="hint">Asenna Plotteri kotinäytölle, niin se avautuu PWA-sovelluksena.</p>
+ </section>
+
+ <section>
  <h3>Sääkerrokset</h3>
  <label class="settings-row">
  <span>🌧 Sadetutka</span>
@@ -753,6 +770,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var placeSearchBtn = document.getElementById('place-search-btn');
  var placeResultsEl = document.getElementById('place-results');
  var placeSearchStatus = document.getElementById('place-search-status');
+ var wakeLockToggle = document.getElementById('wake-lock-toggle');
+ var wakeLockStatus = document.getElementById('wake-lock-status');
+ var installAppBtn = document.getElementById('install-app-btn');
+ var installAppStatus = document.getElementById('install-app-status');
  var radarToggle = document.getElementById('radar-toggle');
  var tileCacheEnabled = document.getElementById('tile-cache-enabled');
  var tileCacheMax = document.getElementById('tile-cache-max');
@@ -1111,6 +1132,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  radarVisible: true,
  indexVisible: false,
  tracksVisible: true,
+ wakeLockEnabled: true,
  baseLayer: null,
  sykeVisible: true,
  vesijarviVisible: false,
@@ -1121,6 +1143,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (settings.radarVisible == null) settings.radarVisible = true;
  if (settings.indexVisible == null) settings.indexVisible = false;
  if (settings.tracksVisible == null) settings.tracksVisible = true;
+ if (settings.wakeLockEnabled == null) settings.wakeLockEnabled = true;
  if (settings.sykeVisible == null) settings.sykeVisible = true;
  if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
  if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
@@ -1150,6 +1173,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var placeSearchMarker = null;
 
  apiKeyInput.value = settings.apiKey || '';
+ wakeLockToggle.checked = settings.wakeLockEnabled !== false;
  radarToggle.checked = settings.radarVisible !== false;
  tileCacheEnabled.checked = !!settings.tileCache.enabled;
  tileCacheMax.value = settings.tileCache.maxTiles;
@@ -2438,6 +2462,148 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setInterval(function () {
  if (lastDayFetch) fetchDayConditions(lastDayFetch.lat, lastDayFetch.lon, true);
  }, 30 * 60000);
+
+ // ---------- PWA install ----------
+ var installPromptEvent = null;
+
+ function isStandaloneApp() {
+ return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+ }
+
+ function isIosBrowser() {
+ return /iphone|ipad|ipod/i.test(window.navigator.userAgent);
+ }
+
+ function updateInstallAppUi() {
+ if (isStandaloneApp()) {
+ installAppBtn.disabled = true;
+ installAppStatus.textContent = 'Plotteri on jo asennettuna sovellustilaan.';
+ return;
+ }
+ installAppBtn.disabled = false;
+ if (installPromptEvent) {
+ installAppStatus.textContent = 'Selain tarjoaa nyt asennuksen kotinäytölle.';
+ } else if (isIosBrowser()) {
+ installAppStatus.textContent = 'iPhonella asenna Jakaminen-valikosta: Lisää Koti-valikkoon.';
+ } else {
+ installAppStatus.textContent = 'Jos selain ei tarjoa asennusta, käytä selaimen valikosta Asenna sovellus tai Lisää aloitusnäyttöön.';
+ }
+ }
+
+ window.addEventListener('beforeinstallprompt', function (event) {
+ event.preventDefault();
+ installPromptEvent = event;
+ updateInstallAppUi();
+ });
+
+ window.addEventListener('appinstalled', function () {
+ installPromptEvent = null;
+ updateInstallAppUi();
+ });
+
+ installAppBtn.addEventListener('click', async function () {
+ if (isStandaloneApp()) {
+ updateInstallAppUi();
+ return;
+ }
+ if (!installPromptEvent) {
+ updateInstallAppUi();
+ return;
+ }
+ var promptEvent = installPromptEvent;
+ installPromptEvent = null;
+ try {
+ await promptEvent.prompt();
+ var choice = await promptEvent.userChoice;
+ installAppStatus.textContent = choice && choice.outcome === 'accepted'
+ ? 'Asennus käynnistyi.'
+ : 'Asennusta ei tehty.';
+ } catch (e) {
+ console.warn('PWA-asennus ei onnistunut:', e);
+ installAppStatus.textContent = 'Asennus ei onnistunut selaimen kautta. Kokeile selaimen valikkoa.';
+ }
+ });
+
+ updateInstallAppUi();
+
+ // ---------- screen wake lock ----------
+ var wakeLockSentinel = null;
+ var wakeLockRequesting = false;
+
+ function wakeLockSupported() {
+ return !!(navigator.wakeLock && navigator.wakeLock.request);
+ }
+
+ function setWakeLockStatus(text) {
+ if (wakeLockStatus) wakeLockStatus.textContent = text;
+ }
+
+ async function releaseWakeLock() {
+ if (!wakeLockSentinel) return;
+ var sentinel = wakeLockSentinel;
+ wakeLockSentinel = null;
+ try {
+ await sentinel.release();
+ } catch (e) { /* already released */ }
+ }
+
+ async function requestWakeLock() {
+ if (settings.wakeLockEnabled === false) {
+ await releaseWakeLock();
+ setWakeLockStatus('Näytön hereilläpito ei ole käytössä.');
+ return false;
+ }
+ if (!wakeLockSupported()) {
+ setWakeLockStatus('Selain ei tue näytön hereilläpitoa tässä tilassa.');
+ return false;
+ }
+ if (document.visibilityState !== 'visible') {
+ setWakeLockStatus('Näytön hereilläpito aktivoituu, kun appi on näkyvissä.');
+ return false;
+ }
+ if (wakeLockSentinel) {
+ setWakeLockStatus('Näyttö pidetään hereillä ajon aikana.');
+ return true;
+ }
+ if (wakeLockRequesting) return false;
+ wakeLockRequesting = true;
+ try {
+ wakeLockSentinel = await navigator.wakeLock.request('screen');
+ wakeLockSentinel.addEventListener('release', function () {
+ wakeLockSentinel = null;
+ if (settings.wakeLockEnabled !== false && document.visibilityState === 'visible') {
+ setWakeLockStatus('Näytön hereilläpito vapautui. Napauta appia aktivoidaksesi uudelleen.');
+ }
+ });
+ setWakeLockStatus('Näyttö pidetään hereillä ajon aikana.');
+ return true;
+ } catch (e) {
+ console.warn('Wake lock ei aktivoitunut:', e);
+ setWakeLockStatus('Näytön hereilläpito estyi. Napauta appia tai tarkista selaimen tuki.');
+ return false;
+ } finally {
+ wakeLockRequesting = false;
+ }
+ }
+
+ wakeLockToggle.addEventListener('change', async function () {
+ settings.wakeLockEnabled = !!wakeLockToggle.checked;
+ await saveJSON('settings', settings);
+ if (settings.wakeLockEnabled) await requestWakeLock();
+ else await releaseWakeLock();
+ if (!settings.wakeLockEnabled) setWakeLockStatus('Näytön hereilläpito ei ole käytössä.');
+ });
+
+ document.addEventListener('visibilitychange', function () {
+ if (document.visibilityState === 'visible') requestWakeLock();
+ });
+ window.addEventListener('pagehide', releaseWakeLock);
+ ['pointerdown', 'keydown', 'touchstart'].forEach(function (eventName) {
+ document.addEventListener(eventName, function () {
+ if (settings.wakeLockEnabled !== false && !wakeLockSentinel) requestWakeLock();
+ }, { passive: true });
+ });
+ requestWakeLock();
 
  // ---------- position tracking ----------
  var posMarker = null;
