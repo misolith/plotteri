@@ -7,7 +7,7 @@ Tuotanto: https://lith.fi/map/
 ## Ominaisuudet
 
 - Leaflet-kartta MML:n maastokartalla, OpenStreetMapilla, Traficomin merikartalla ja SYKE:n syvyyskerroksilla.
-- GPS-seuranta nopeudella, suunnalla, tarkkuudella, näytön hereilläpidolla ja reitin tallennuksella.
+- GPS-seuranta nopeudella, suunnalla, tarkkuudella, näytön hereilläpidolla ja reitin tallennuksella. Käynnissä oleva reitti checkpointataan myös appin mennessä taustalle.
 - Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella. Reitit näkyvät kartalla oletuksena omana layerinään.
 - Reittien ja kalapaikkojen GeoJSON-vienti ja -tuonti laitteelta toiselle siirtymistä varten.
 - Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
@@ -68,6 +68,7 @@ Osa palveluista voi edellyttää käyttäjän omaa API-avainta. MML API-avain ta
 Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 
 - Reitit, kalapaikat, asetukset ja välimuistiin tallennettu Vesijärvi-data ovat selaimen IndexedDB:ssä.
+- Käynnissä oleva reitti peilataan lisäksi localStorageen, jotta puhelimen lukitus, PWA:n taustalle meno tai sivun sulkeutuminen ei poista viimeistä palautuspistettä.
 - Asetuksia peilataan tarvittaessa localStorageen yhteensopivuuden vuoksi.
 - MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön. Avain löytyy asetusten lisäosiosta, jotta ajon aikaiset asetukset pysyvät näkyvillä.
 - Näytön hereilläpito käyttää selaimen Screen Wake Lock API:a, jos PWA/selaintila tukee sitä. Jos API puuttuu, Plotteri yrittää iOS-yhteensopivaa NoSleep-varatilaa käyttäjän napautuksen jälkeen. Lukko vapautuu automaattisesti, jos appi ei ole näkyvissä.

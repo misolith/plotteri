@@ -627,11 +627,24 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function loadJSON(key, fallback) {
  try {
+ var localValue = window.localStorage ? window.localStorage.getItem('kalastusplotteri:' + key) : null;
  try {
  var idbValue = await idbGet(key);
- if (idbValue != null) return JSON.parse(idbValue);
+ if (idbValue != null) {
+ var parsedIdb = JSON.parse(idbValue);
+ if (key === 'active_track' && localValue) {
+ try {
+ var parsedLocal = JSON.parse(localValue);
+ var idbPoints = parsedIdb && parsedIdb.points ? parsedIdb.points.length : 0;
+ var localPoints = parsedLocal && parsedLocal.points ? parsedLocal.points.length : 0;
+ var idbUpdated = parsedIdb && parsedIdb.updated ? parsedIdb.updated : 0;
+ var localUpdated = parsedLocal && parsedLocal.updated ? parsedLocal.updated : 0;
+ if (localPoints > idbPoints || (localPoints === idbPoints && localUpdated >= idbUpdated)) return parsedLocal;
+ } catch (localParseError) { /* ignore broken active_track fallback */ }
+ }
+ return parsedIdb;
+ }
  } catch (idbError) { /* fall through to legacy storage */ }
- var localValue = window.localStorage ? window.localStorage.getItem('kalastusplotteri:' + key) : null;
  if (localValue) {
  try {
  await idbSet(key, localValue);
@@ -655,8 +668,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  async function saveJSON(key, value) {
  try {
  var serialized = JSON.stringify(value);
+ if (window.localStorage && (key === 'settings' || key === 'active_track')) {
+ window.localStorage.setItem('kalastusplotteri:' + key, serialized);
+ }
  await idbSet(key, serialized);
- if (window.localStorage && key === 'settings') window.localStorage.setItem('kalastusplotteri:' + key, serialized);
  return true;
  } catch (e) {
  try {
@@ -1754,6 +1769,63 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
  }
 
+ function plainTrack(track) {
+ return {
+ id: track.id,
+ name: track.name,
+ start: track.start,
+ end: track.end,
+ points: (track.points || []).map(function (pt) {
+ return {
+ lat: pt.lat,
+ lon: pt.lon,
+ t: pt.t,
+ speedKmh: pt.speedKmh
+ };
+ })
+ };
+ }
+
+ function plainTracks(trackList) {
+ return trackList
+ .filter(function (track) { return track && track.points && track.points.length >= 2; })
+ .map(plainTrack);
+ }
+
+ async function saveTracksMerged(nextTracks) {
+ var storedTracks = await loadJSON('tracks', []);
+ var merged = [];
+ var seen = new Set();
+ function append(track) {
+ if (!track || !track.points || track.points.length < 2) return;
+ var normalized = plainTrack(track);
+ var key = trackDedupeKey(normalized);
+ if (seen.has(key)) return;
+ seen.add(key);
+ merged.push(normalized);
+ }
+ storedTracks.forEach(append);
+ nextTracks.forEach(append);
+ var ok = await saveJSON('tracks', merged);
+ if (!ok) return false;
+ var savedTracks = await loadJSON('tracks', []);
+ var savedKeys = new Set(savedTracks.map(trackDedupeKey));
+ var allPersisted = plainTracks(nextTracks).every(function (track) {
+ return savedKeys.has(trackDedupeKey(track));
+ });
+ if (!allPersisted) return false;
+ tracks = savedTracks;
+ return true;
+ }
+
+ async function saveTracksReplacing(nextTracks) {
+ var normalized = plainTracks(nextTracks);
+ var ok = await saveJSON('tracks', normalized);
+ if (!ok) return false;
+ tracks = await loadJSON('tracks', []);
+ return true;
+ }
+
  // ---------- kalapaikka-analyysi: syvyystiilet SYKE + Traficom WFS:sta ----------
  var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
  var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -2660,9 +2732,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  });
 
  document.addEventListener('visibilitychange', function () {
+ if (document.visibilityState === 'hidden') persistActiveTrackSync();
  if (document.visibilityState === 'visible') requestWakeLock();
  });
- window.addEventListener('pagehide', releaseWakeLock);
+ window.addEventListener('pagehide', function () {
+ persistActiveTrackSync();
+ releaseWakeLock();
+ });
  ['pointerdown', 'keydown', 'touchstart'].forEach(function (eventName) {
  document.addEventListener(eventName, function () {
  if (settings.wakeLockEnabled !== false && !wakeLockActive()) requestWakeLock();
@@ -2866,7 +2942,27 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function checkpointActiveTrack() {
  if (!recording) return;
- await saveJSON('active_track', { start: recordStart, points: recordPoints });
+ await persistActiveTrackNow();
+ }
+
+ function activeTrackSnapshot() {
+ return {
+ start: recordStart,
+ updated: Date.now(),
+ points: recordPoints.slice()
+ };
+ }
+
+ async function persistActiveTrackNow() {
+ if (!recordStart || recordPoints.length < 1) return false;
+ return await saveJSON('active_track', activeTrackSnapshot());
+ }
+
+ function persistActiveTrackSync() {
+ if (!recording || !recordStart || recordPoints.length < 1 || !window.localStorage) return;
+ try {
+ window.localStorage.setItem('kalastusplotteri:active_track', JSON.stringify(activeTrackSnapshot()));
+ } catch (e) { /* page is closing or storage is full */ }
  }
 
  function updateRecTimer() {
@@ -2890,10 +2986,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  name: 'Reitti ' + new Date(recordStart).toLocaleString('fi-FI'),
  start: recordStart,
  end: Date.now(),
- points: recordPoints
+ points: recordPoints.slice()
  };
- tracks.push(track);
- await saveJSON('tracks', tracks);
+ var saved = await saveTracksMerged(tracks.concat([track]));
+ if (!saved) {
+ await persistActiveTrackNow();
+ showToast('Reitin tallennus epäonnistui. Reitti jäi palautettavaksi.');
+ renderTrackList();
+ recordPoints = [];
+ return;
+ }
  renderTrackList();
  }
  await deleteKey('active_track');
@@ -2907,6 +3009,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  recordPoints = [];
  if (currentPos) recordPoints.push({ lat: currentPos.lat, lon: currentPos.lon, t: recordStart, speedKmh: currentSpeedKmh });
  activeTrackLayer = makeSpeedTrackLayer(recordPoints, { weight: 4, opacity: 0.95 }).addTo(map);
+ await persistActiveTrackNow();
  recIndicator.classList.remove('hidden');
  updateRecTimer();
  recordTimerHandle = setInterval(updateRecTimer, 1000);
@@ -3248,7 +3351,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var trk = tracks.find(function (t) { return t.id === id; });
  if (trk && trk._line) savedTracksLayer.removeLayer(trk._line);
  tracks = tracks.filter(function (t) { return t.id !== id; });
- await saveJSON('tracks', tracks);
+ var saved = await saveTracksReplacing(tracks);
+ if (!saved) showToast('Reitin poistoa ei saatu tallennettua.');
  renderTrackList();
  });
 
@@ -3382,6 +3486,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  function trackDedupeKey(trk) {
+ if (trk.id) return 'id|' + String(trk.id);
  var first = trk.points[0] || {};
  var last = trk.points[trk.points.length - 1] || {};
  return [
@@ -3489,7 +3594,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  tracks.push(trk);
  });
  await saveJSON('waypoints', waypoints);
- await saveJSON('tracks', tracks);
+ var tracksSaved = await saveTracksMerged(tracks);
+ if (!tracksSaved) throw new Error('reittien tallennus epäonnistui');
  renderWaypointList();
  renderTrackList();
  var focus = importedWaypoints[0] || (importedTracks[0] && importedTracks[0].points[0]);
@@ -3524,17 +3630,23 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (activeTrack && activeTrack.points && activeTrack.points.length > 1) {
  var restore = confirm('Löytyi keskeneräiseksi jäänyt reitti (' + activeTrack.points.length + ' pistettä). Tallennetaanko se?');
  if (restore) {
- tracks.push({
+ var restoredTrack = {
  id: 'trk_' + activeTrack.start,
  name: 'Reitti ' + new Date(activeTrack.start).toLocaleString('fi-FI') + ' (palautettu)',
  start: activeTrack.start,
- end: Date.now(),
+ end: activeTrack.updated || Date.now(),
  points: activeTrack.points
- });
- await saveJSON('tracks', tracks);
+ };
+ var restored = await saveTracksMerged(tracks.concat([restoredTrack]));
+ if (restored) {
  renderTrackList();
- }
  await deleteKey('active_track');
+ } else {
+ showToast('Palautetun reitin tallennus epäonnistui. Se jätettiin talteen.');
+ }
+ } else {
+ await deleteKey('active_track');
+ }
  }
 
  if (waypoints.length) {
