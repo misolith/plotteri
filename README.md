@@ -2,13 +2,14 @@
 
 Plotteri on selaimessa toimiva kalastus- ja veneilykartta Suomen vesille. Sovellus toimii staattisena web-appina, tallentaa käyttäjän omat tiedot selaimeen ja voidaan asentaa puhelimen tai tabletin kotinäytölle PWA-sovelluksena.
 
-Tuotanto: https://lith.fi/app/map/
+Tuotanto: https://lith.fi/map/
 
 ## Ominaisuudet
 
 - Leaflet-kartta MML:n maastokartalla, OpenStreetMapilla, Traficomin merikartalla ja SYKE:n syvyyskerroksilla.
 - GPS-seuranta nopeudella, suunnalla, tarkkuudella, wake lockilla ja reitin tallennuksella.
 - Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella.
+- Reittien ja kalapaikkojen GeoJSON-vienti ja -tuonti laitteelta toiselle siirtymistä varten.
 - Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
 - Kalapaikka-indeksi: SYKEn vektorimuotoisesta järvisyvyysdatasta laskettu karttataso, joka korostaa syvänteiden reunat ja tuulen altistamat rannat.
 - Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
@@ -34,7 +35,7 @@ Tuotanto: https://lith.fi/app/map/
 
 ## POI-aineisto
 
-Karttakohteet (nuotiopaikat, laavut, bensa-asemat, terassit) jaetaan staattisina tiedostoina `pois/`-hakemistossa, jotta appi ei riipu Overpass-rajapinnan saatavuudesta. Aineisto on pilkottu 0.5° × 1.0° soluihin (`pois/p_<la>_<lo>.json`), jotka appi lataa näkymän mukaan; `pois/index.json` kertoo mitkä solut ovat olemassa. Jos aineisto puuttuu deploysta, appi käyttää Overpassia fallbackina.
+Karttakohteet (nuotiopaikat, laavut, bensa-asemat, terassit, veneenlaskupaikat, satamat, vesipisteet sekä kiinnitys- ja ankkuripaikat) jaetaan staattisina tiedostoina `pois/`-hakemistossa, jotta appi ei riipu Overpass-rajapinnan saatavuudesta. Aineisto on pilkottu 0.5° × 1.0° soluihin (`pois/p_<la>_<lo>.json`), jotka appi lataa näkymän mukaan; `pois/index.json` kertoo mitkä solut ovat olemassa. Jos aineisto puuttuu deploysta, appi käyttää Overpassia fallbackina.
 
 Aineiston päivitys:
 
@@ -74,7 +75,7 @@ Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 - Syvyystiilet cachetetaan IndexedDB:hen rajatulla määrällä ja säilytysajalla.
 - FMI:n sadetutkaa ei cacheteta, koska sääkuva vanhenee nopeasti.
 
-Selaimen, käyttöjärjestelmän tai käyttäjän oma tyhjennys voi poistaa paikalliset tiedot. Tärkeät reitit ja kalapaikat kannattaa viedä talteen tarvittaessa.
+Selaimen, käyttöjärjestelmän tai käyttäjän oma tyhjennys voi poistaa paikalliset tiedot. Tärkeät reitit ja kalapaikat kannattaa viedä talteen GeoJSON-tiedostona. GeoJSON-tuonti lisää tiedoston reitit ja kalapaikat nykyisten rinnalle ja ohittaa ilmeiset duplikaatit.
 
 ## Tile-Cache
 
@@ -125,7 +126,7 @@ LICENSE                 MIT-lisenssi
 Tuotantoversio palvellaan tällä hetkellä osoitteesta:
 
 ```text
-https://lith.fi/app/map/
+https://lith.fi/map/
 ```
 
 Julkaisukohde odottaa näitä staattisia tiedostoja sellaisenaan:
@@ -137,6 +138,7 @@ Julkaisukohde odottaa näitä staattisia tiedostoja sellaisenaan:
 - `map-sw.js`
 - `manifest.json`
 - `icons/plotteri-icon.svg`
+- `pois/`
 
 ## Mahdollisia Jatkokehityksiä
 
@@ -146,7 +148,7 @@ Hyviä seuraavia kohteita:
 - Paremmat veneilykohteet: vierasvenesatamat, rampit, septiasemat ja vesipisteet.
 - Kalastusrajoitukset ja lupa-alueet karttatasoina.
 - Reittien rakenteisemmat haut, esimerkiksi kuukauden tai vesialueen mukaan.
-- Reittien ja kalapaikkojen tuonti/vienti käyttöliittymästä.
+- Kevyt palvelinpersistointi ja synkronointi usean laitteen välillä.
 
 ## Lisenssi
 

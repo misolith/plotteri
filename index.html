@@ -484,6 +484,9 @@
 
  <section>
  <button id="export-btn">Vie GeoJSON-tiedostona</button>
+ <button id="import-btn">Tuo GeoJSON-tiedostosta</button>
+ <input id="import-file-input" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden>
+ <p id="import-status" class="hint">Tuonti lisää reitit ja kalapaikat nykyisten rinnalle.</p>
  </section>
 </div>
 
@@ -764,6 +767,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var waypointListEl = document.getElementById('waypoint-list');
  var waypointEmpty = document.getElementById('waypoint-empty');
  var exportBtn = document.getElementById('export-btn');
+ var importBtn = document.getElementById('import-btn');
+ var importFileInput = document.getElementById('import-file-input');
+ var importStatus = document.getElementById('import-status');
  var markerModal = document.getElementById('marker-modal');
  var wpName = document.getElementById('wp-name');
  var wpNote = document.getElementById('wp-note');
@@ -3052,7 +3058,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  features.push({
  type: 'Feature',
  geometry: { type: 'Point', coordinates: [wp.lon, wp.lat] },
- properties: { name: wp.name, note: wp.note, speedKmh: wp.speedKmh, time: new Date(wp.t).toISOString(), kind: 'waypoint' }
+ properties: {
+ id: wp.id,
+ name: wp.name,
+ note: wp.note,
+ speedKmh: wp.speedKmh,
+ time: new Date(wp.t).toISOString(),
+ kind: 'waypoint',
+ app: 'kalastusplotteri',
+ schemaVersion: 2
+ }
  });
  });
  tracks.forEach(function (trk) {
@@ -3064,7 +3079,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  start: new Date(trk.start).toISOString(),
  end: new Date(trk.end).toISOString(),
  speedsKmh: trk.points.map(function (p) { return p.speedKmh; }),
- kind: 'track'
+ pointTimes: trk.points.map(function (p) { return p.t ? new Date(p.t).toISOString() : null; }),
+ id: trk.id,
+ kind: 'track',
+ app: 'kalastusplotteri',
+ schemaVersion: 2
  }
  });
  });
@@ -3078,6 +3097,183 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  a.click();
  a.remove();
  URL.revokeObjectURL(url);
+ });
+
+ function normalizeFeatureList(data) {
+ if (!data || typeof data !== 'object') throw new Error('Tiedosto ei ole GeoJSONia.');
+ if (data.type === 'FeatureCollection') return Array.isArray(data.features) ? data.features : [];
+ if (data.type === 'Feature') return [data];
+ throw new Error('GeoJSON-tyypin pitää olla FeatureCollection tai Feature.');
+ }
+
+ function parseImportTime(value, fallback) {
+ if (typeof value === 'number' && isFinite(value)) return value;
+ if (typeof value === 'string' && value) {
+ var parsed = Date.parse(value);
+ if (!isNaN(parsed)) return parsed;
+ }
+ return fallback;
+ }
+
+ function numberOrNull(value) {
+ var n = Number(value);
+ return isFinite(n) ? n : null;
+ }
+
+ function coordinatePair(coords) {
+ if (!Array.isArray(coords) || coords.length < 2) return null;
+ var lon = Number(coords[0]);
+ var lat = Number(coords[1]);
+ if (!isFinite(lat) || !isFinite(lon)) return null;
+ if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+ return { lat: lat, lon: lon };
+ }
+
+ function dedupeCoord(value) {
+ return Number(value).toFixed(5);
+ }
+
+ function waypointDedupeKey(wp) {
+ return [
+ String(wp.name || '').trim().toLowerCase(),
+ dedupeCoord(wp.lat),
+ dedupeCoord(wp.lon),
+ String(wp.t || '')
+ ].join('|');
+ }
+
+ function trackDedupeKey(trk) {
+ var first = trk.points[0] || {};
+ var last = trk.points[trk.points.length - 1] || {};
+ return [
+ String(trk.name || '').trim().toLowerCase(),
+ String(trk.start || ''),
+ String(trk.end || ''),
+ String(trk.points.length),
+ dedupeCoord(first.lat || 0),
+ dedupeCoord(first.lon || 0),
+ dedupeCoord(last.lat || 0),
+ dedupeCoord(last.lon || 0)
+ ].join('|');
+ }
+
+ function importWaypointFeature(feature, now) {
+ var props = feature.properties || {};
+ var coord = coordinatePair(feature.geometry && feature.geometry.coordinates);
+ if (!coord) return null;
+ var t = parseImportTime(props.time || props.t || props.timestamp, now);
+ return {
+ id: 'wp_import_' + t + '_' + Math.random().toString(36).slice(2, 8),
+ name: String(props.name || 'Kalapaikka'),
+ note: props.note != null ? String(props.note) : '',
+ speedKmh: numberOrNull(props.speedKmh),
+ lat: coord.lat,
+ lon: coord.lon,
+ t: t
+ };
+ }
+
+ function importTrackFeature(feature, now) {
+ var props = feature.properties || {};
+ var coords = feature.geometry && feature.geometry.coordinates;
+ if (!Array.isArray(coords) || coords.length < 2) return null;
+ var start = parseImportTime(props.start, now);
+ var end = parseImportTime(props.end, start);
+ if (end < start) end = start;
+ var speeds = Array.isArray(props.speedsKmh) ? props.speedsKmh : [];
+ var pointTimes = Array.isArray(props.pointTimes) ? props.pointTimes : [];
+ var points = [];
+ coords.forEach(function (pair, index) {
+ var coord = coordinatePair(pair);
+ if (!coord) return;
+ var fallbackT = coords.length > 1 ? start + Math.round((end - start) * (index / (coords.length - 1))) : start;
+ points.push({
+ lat: coord.lat,
+ lon: coord.lon,
+ t: parseImportTime(pointTimes[index], fallbackT),
+ speedKmh: numberOrNull(speeds[index])
+ });
+ });
+ if (points.length < 2) return null;
+ return {
+ id: 'trk_import_' + start + '_' + Math.random().toString(36).slice(2, 8),
+ name: String(props.name || 'Tuotu reitti'),
+ start: start,
+ end: end,
+ points: points
+ };
+ }
+
+ async function importGeoJSONFile(file) {
+ var text = await file.text();
+ var data = JSON.parse(text);
+ var features = normalizeFeatureList(data);
+ var now = Date.now();
+ var waypointKeys = new Set(waypoints.map(waypointDedupeKey));
+ var trackKeys = new Set(tracks.map(trackDedupeKey));
+ var importedWaypoints = [];
+ var importedTracks = [];
+ var skipped = 0;
+ features.forEach(function (feature) {
+ if (!feature || feature.type !== 'Feature' || !feature.geometry) { skipped++; return; }
+ var props = feature.properties || {};
+ var kind = props.kind || props.type || '';
+ if (feature.geometry.type === 'Point' && (!kind || kind === 'waypoint')) {
+ var wp = importWaypointFeature(feature, now);
+ if (!wp) { skipped++; return; }
+ var wpKey = waypointDedupeKey(wp);
+ if (waypointKeys.has(wpKey)) { skipped++; return; }
+ waypointKeys.add(wpKey);
+ importedWaypoints.push(wp);
+ return;
+ }
+ if (feature.geometry.type === 'LineString' && (!kind || kind === 'track')) {
+ var trk = importTrackFeature(feature, now);
+ if (!trk) { skipped++; return; }
+ var trkKey = trackDedupeKey(trk);
+ if (trackKeys.has(trkKey)) { skipped++; return; }
+ trackKeys.add(trkKey);
+ importedTracks.push(trk);
+ return;
+ }
+ skipped++;
+ });
+ if (!importedWaypoints.length && !importedTracks.length) {
+ importStatus.textContent = 'Ei uusia reittejä tai kalapaikkoja tuotavaksi.';
+ return;
+ }
+ importedWaypoints.forEach(function (wp) {
+ waypoints.push(wp);
+ addWaypointMarker(wp);
+ });
+ importedTracks.forEach(function (trk) {
+ tracks.push(trk);
+ });
+ await saveJSON('waypoints', waypoints);
+ await saveJSON('tracks', tracks);
+ renderWaypointList();
+ renderTrackList();
+ var focus = importedWaypoints[0] || (importedTracks[0] && importedTracks[0].points[0]);
+ if (focus) map.setView([focus.lat, focus.lon], 13);
+ importStatus.textContent = 'Tuotu ' + importedWaypoints.length + ' kalapaikkaa ja ' + importedTracks.length + ' reittiä.' + (skipped ? ' Ohitettu ' + skipped + ' kohdetta.' : '');
+ showToast('GeoJSON-import valmis');
+ }
+
+ importBtn.addEventListener('click', function () {
+ importFileInput.value = '';
+ importFileInput.click();
+ });
+
+ importFileInput.addEventListener('change', async function () {
+ var file = importFileInput.files && importFileInput.files[0];
+ if (!file) return;
+ importStatus.textContent = 'Tuodaan tiedostoa...';
+ try {
+ await importGeoJSONFile(file);
+ } catch (e) {
+ console.error('GeoJSON-import epäonnistui:', e);
+ importStatus.textContent = 'Tuonti epäonnistui: ' + (e && e.message ? e.message : 'tiedostoa ei voitu lukea');
+ }
  });
 
  // ---------- init render + crash recovery ----------
