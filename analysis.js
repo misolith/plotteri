@@ -13,13 +13,19 @@ export var SCORE_WEIGHTS = {
   minScoreToShow: 0.12
 };
 
-// Lajikohtaiset piirteet. Numerot ovat lähtöarvauksia, kalibroitava kokemuksella.
+// Lajikohtaiset piirteet, kalibroitava kokemuksella. Syvyydet kesakauden
+// tyypillisia suomalaisvesille; valosiirto nostaa matalampaan hamarassa.
+// - hauki: vaijyy rakenteessa ja tuulirannoilla 0.5-5 m, isot yksilot syvanteen reunoilla
+// - kuha: hamarasaalistaja, paivalla 4-10 m penkoilla, nousee yolla selvasti matalaan
+// - ahven: paivakala, kivikot ja reunat 1.5-6 m, loppukesalla syvenee
+// - muikku: kylman veden pelagi, paivalla harppauskerroksen alapuolella, nousee hamarassa
+// - silakka: parvet harppauskerroksen tuntumassa ja alla, merella syvempi kerros
 export var SPECIES_TRAITS = {
-  hauki:   { habitat: 'benthic', structureAffinity: 1.0,  shoreAffinity: 1.0, lightSens: 0.4, depth: { b0: 0.3, b1: 1.5, b2: 4, b3: 8 } },
-  kuha:    { habitat: 'benthic', structureAffinity: 1.0,  shoreAffinity: 0.7, lightSens: 0.9, depth: { b0: 1.0, b1: 3.5, b2: 8, b3: 15 } },
-  ahven:   { habitat: 'benthic', structureAffinity: 0.7,  shoreAffinity: 0.8, lightSens: 0.2, depth: { b0: 0.5, b1: 2,   b2: 6, b3: 10 } },
-  muikku:  { habitat: 'pelagic', structureAffinity: 0.05, shoreAffinity: 0.1, lightSens: 0.7, thermoOffsetM: -1 },
-  silakka: { habitat: 'pelagic', structureAffinity: 0.1,  shoreAffinity: 0.2, lightSens: 0.7, thermoOffsetM: -1 }
+  hauki:   { habitat: 'benthic', structureAffinity: 0.9,  shoreAffinity: 1.0,  lightSens: 0.4, depth: { b0: 0.3, b1: 1.0, b2: 4.5, b3: 10 } },
+  kuha:    { habitat: 'benthic', structureAffinity: 1.0,  shoreAffinity: 0.6,  lightSens: 1.0, depth: { b0: 1.5, b1: 4,   b2: 9,   b3: 16 } },
+  ahven:   { habitat: 'benthic', structureAffinity: 0.8,  shoreAffinity: 0.7,  lightSens: 0.2, depth: { b0: 0.5, b1: 1.5, b2: 6,   b3: 12 } },
+  muikku:  { habitat: 'pelagic', structureAffinity: 0.05, shoreAffinity: 0.1,  lightSens: 1.0, thermoOffsetM: 2 },
+  silakka: { habitat: 'pelagic', structureAffinity: 0.1,  shoreAffinity: 0.15, lightSens: 0.8, thermoOffsetM: 4 }
 };
 
 export var DAY_WEIGHTS = {
@@ -398,8 +404,9 @@ export function buildAnalysis(input) {
     if (!mask[idx]) continue;
     var slopeN = Math.min(1, slope[idx] / slopeNormEff);
     slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.8) / 1.7));
+    // pelagisilla valosiirto mallintaa vuorokausivaellusta: hamarassa parvi nousee
     var pref = isPelagic
-      ? pelagicPreference(depth[idx], thermoDepthM, traits.thermoOffsetM)
+      ? pelagicPreference(depth[idx], thermoDepthM, (traits.thermoOffsetM || 0) - effShift)
       : depthPreference(depth[idx], traits ? traits.depth : null, effShift, strat);
     var s = (wSlope * slopeN + wWind * windExp[idx] * windScale + wPref * pref) / wSum;
     score[idx] = s;
@@ -415,20 +422,32 @@ export function buildAnalysis(input) {
   };
 }
 
-// Kausikerroin: 0 = ei kerrostumaa (kevat/syksy/talvi), 1 = vahvin kerrostuma
-export function stratificationFactor(date) {
+function dayOfYear(date) {
   var start = new Date(date.getFullYear(), 0, 0);
-  var doy = Math.floor((date - start) / 86400000);
-  var v = 1 - Math.min(1, Math.abs(doy - 210) / 70); // huippu n. heinakuun lopulla
-  return Math.max(0, v);
+  return Math.floor((date - start) / 86400000);
 }
 
-// Karkea kalenteri+leveysaste-approksimaatio, ei mitattua lampotilaa
+// Kausikerroin: 0 = ei kerrostumaa (kevat/syksy/talvi), 1 = vakaa kesakerrostuma.
+// Trapetsoidi: kerrostuma syntyy kesakuussa, pysyy vakaana heina-elokuun ja
+// purkautuu syys-lokakuun taysikiertoon.
+export function stratificationFactor(date) {
+  var doy = dayOfYear(date);
+  if (doy < 150 || doy > 285) return 0;
+  if (doy < 185) return (doy - 150) / 35;
+  if (doy <= 245) return 1;
+  return Math.max(0, (285 - doy) / 40);
+}
+
+// Karkea kalenteri+leveysaste-approksimaatio, ei mitattua lampotilaa.
+// Harppauskerros SYVENEE kesan mittaan taysikiertoon asti (epilimnion kasvaa):
+// etela-Suomen jarvissa n. 5-7 m juhannuksena, 8-11 m loppukesalla.
+// Pohjoisessa kerrostuma on matalampi ja lyhytikaisempi.
 export function estimateThermoclineDepth(date, lat) {
   var strat = stratificationFactor(date);
   if (strat <= 0) return null;
-  var latFactor = Math.max(0.3, Math.min(1, (66 - Math.abs(lat)) / 15));
-  return (2 + 5 * strat) * latFactor;
+  var progress = Math.max(0, Math.min(1, (dayOfYear(date) - 150) / 120));
+  var latFactor = Math.max(0.65, Math.min(1, 1 - (Math.abs(lat) - 60) * 0.04));
+  return (4 + 7 * progress) * latFactor;
 }
 
 export function depthPreference(d, preset, shiftM, strat) {

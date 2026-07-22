@@ -1868,7 +1868,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!window.SunCalc) return 0;
  var altDeg = SunCalc.getPosition(now, lat, lon).altitude * 180 / Math.PI;
  var bright = Math.max(0, Math.min(1, (altDeg + 6) / 26));
- return (1 - bright) * 1.5; // max siirtyma metreina pimeaan
+ return (1 - bright) * 2.5; // max siirtyma metreina pimeaan (esim. kuhan yonousu)
  }
 
  function currentSpeciesKey() {
