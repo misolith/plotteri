@@ -14,7 +14,7 @@ Tuotanto: https://lith.fi/app/map/
 - Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
 - Järven 3D-syvyysnäkymä, joka ladataan vasta avattaessa.
 - MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille.
-- OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat ja terassit/ulkotarjoilu.
+- OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat ja terassit/ulkotarjoilu. Kohteet ladataan appin mukana jaettavasta staattisesta aineistosta (`pois/`), ei ajonaikaisista Overpass-kutsuista.
 - FMI:n sadetutka karttaoverlaynä.
 - Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
 - Selaimen tile-cache vain oikeasti katsotuille karttatileille, rajatulla tilemäärällä ja säilytysajalla.
@@ -32,12 +32,28 @@ Tuotanto: https://lith.fi/app/map/
 - 3D-näkymä rakennetaan samasta syvyysruudukosta; three.js ladataan cdnjs:stä vasta näkymää avattaessa.
 - 3D-näkymän Seuraa-tila: kamera seuraa venettä GPS-sijainnin ja suunnan mukaan ja näyttää pohjan muodot ajosuuntaan; syvyys veneen alla otsikkorivillä. Analyysialue rakennetaan lennossa uudelleen veneen ympärille kun ajetaan reunalle. Raahaus vaihtaa vapaaseen kameraan.
 
+## POI-aineisto
+
+Karttakohteet (nuotiopaikat, laavut, bensa-asemat, terassit) jaetaan staattisina tiedostoina `pois/`-hakemistossa, jotta appi ei riipu Overpass-rajapinnan saatavuudesta. Aineisto on pilkottu 0.5° × 1.0° soluihin (`pois/p_<la>_<lo>.json`), jotka appi lataa näkymän mukaan; `pois/index.json` kertoo mitkä solut ovat olemassa. Jos aineisto puuttuu deploysta, appi käyttää Overpassia fallbackina.
+
+Aineiston päivitys:
+
+```bash
+# ensisijainen: Geofabrikin Suomi-ekstrakti (vaatii osmium-tool:n)
+node scripts/update-pois.mjs
+
+# vaihtoehto ilman riippuvuuksia: suora Overpass-haku
+node scripts/update-pois.mjs --source overpass
+```
+
+Geofabrik-ekstrakti (~700 MB) cachetetaan `scripts/.cache/`-hakemistoon vuorokaudeksi. Päivityksen jälkeen committaa muuttunut `pois/`-hakemisto.
+
 ## Datalähteet
 
 Plotteri käyttää julkisia kartta- ja ympäristöaineistoja useista lähteistä:
 
 - Maanmittauslaitos (MML): maastokartta ja paikannimihaku.
-- OpenStreetMap: taustakartta ja POI-kohteet.
+- OpenStreetMap: taustakartta; POI-kohteet Geofabrikin Suomi-ekstraktista (ODbL) esiladattuna.
 - Traficom: julkiset merikarttatiilet.
 - Suomen ympäristökeskus (SYKE): WMS-karttatasot ja järvisyvyysdata WFS-vektoreina.
 - Ilmatieteen laitos (FMI): WMS-sadetutka.
@@ -98,6 +114,8 @@ view3d.js               Järven 3D-syvyysnäkymä (lazy-ladattava)
 map-sw.js               Service worker katsottujen tilejen cachelle
 manifest.json           PWA-manifesti
 icons/plotteri-icon.svg PWA-ikoni
+pois/                   Staattinen POI-aineisto (index.json + solutiedostot)
+scripts/update-pois.mjs POI-aineiston päivitysskripti (Geofabrik/Overpass)
 README.md               Projektin dokumentaatio
 LICENSE                 MIT-lisenssi
 ```

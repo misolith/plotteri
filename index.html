@@ -1445,6 +1445,79 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  throw lastError || new Error('overpass unavailable');
  }
 
+ // ---------- staattinen POI-aineisto (pois/, generoidaan scripts/update-pois.mjs) ----------
+ var POI_STATIC_MEM_MAX = 40;
+ var POI_RENDER_CAP = 500;
+ var poiStaticIndex; // undefined = ei viela haettu, null = ei saatavilla
+ var poiStaticChunks = new Map();
+
+ async function loadPoiStaticIndex() {
+ if (poiStaticIndex !== undefined) return poiStaticIndex;
+ try {
+ var res = await fetch('pois/index.json', { cache: 'no-cache' });
+ poiStaticIndex = res.ok ? await res.json() : null;
+ } catch (e) {
+ poiStaticIndex = null;
+ }
+ if (!poiStaticIndex || !poiStaticIndex.cells) {
+ poiStaticIndex = null;
+ console.info('Staattista POI-aineistoa ei löytynyt, käytetään Overpass-fallbackia.');
+ }
+ return poiStaticIndex;
+ }
+
+ async function getPoiStaticChunk(key) {
+ if (poiStaticChunks.has(key)) return poiStaticChunks.get(key);
+ var elements = null;
+ try {
+ var res = await fetch('pois/' + key + '.json', { cache: 'default' });
+ if (res.ok) elements = await res.json();
+ } catch (e) { /* verkkovirhe: solu jaa tyhjaksi talla kertaa */ }
+ poiStaticChunks.delete(key);
+ poiStaticChunks.set(key, elements);
+ while (poiStaticChunks.size > POI_STATIC_MEM_MAX) {
+ poiStaticChunks.delete(poiStaticChunks.keys().next().value);
+ }
+ return elements;
+ }
+
+ async function renderStaticPois(bounds, activeKeys, index, fetchSeq) {
+ var keys = [];
+ var la0 = Math.floor(bounds.getSouth() / index.cellLatDeg);
+ var la1 = Math.floor(bounds.getNorth() / index.cellLatDeg);
+ var lo0 = Math.floor(bounds.getWest() / index.cellLonDeg);
+ var lo1 = Math.floor(bounds.getEast() / index.cellLonDeg);
+ for (var a = la0; a <= la1; a++) {
+ for (var o = lo0; o <= lo1; o++) {
+ var key = 'p_' + a + '_' + o;
+ if (index.cells[key]) keys.push(key);
+ }
+ }
+ var chunks = await Promise.all(keys.map(getPoiStaticChunk));
+ if (fetchSeq !== poiFetchSeq) return;
+ var kinds = index.kinds || ['firepit', 'shelter', 'fuel', 'terrace'];
+ var activeSet = {};
+ activeKeys.forEach(function (k) { activeSet[k] = true; });
+ Object.keys(poiLayers).forEach(function (k) { poiLayers[k].clearLayers(); });
+ var west = bounds.getWest(), south = bounds.getSouth(), east = bounds.getEast(), north = bounds.getNorth();
+ var added = 0;
+ for (var ci = 0; ci < chunks.length && added < POI_RENDER_CAP; ci++) {
+ var elements = chunks[ci];
+ if (!elements) continue;
+ for (var i = 0; i < elements.length && added < POI_RENDER_CAP; i++) {
+ var el = elements[i];
+ var kind = kinds[el[0]];
+ if (!kind || !activeSet[kind] || !map.hasLayer(poiLayers[kind])) continue;
+ if (el[1] < south || el[1] > north || el[2] < west || el[2] > east) continue;
+ var tags = { name: el[3] || '', operator: el[4] || '', opening_hours: el[5] || '', website: el[6] || '' };
+ L.marker([el[1], el[2]], { icon: poiIcon(kind) })
+ .bindPopup(poiPopupHtml(kind, tags))
+ .addTo(poiLayers[kind]);
+ added++;
+ }
+ }
+ }
+
  async function loadPoiLayers() {
  var activeKeys = activePoiLayerKeys();
  if (!activeKeys.length) return;
@@ -1463,6 +1536,21 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (cacheKey === poiLoadedKey || cacheKey === poiInFlightKey) return;
  var fetchSeq = ++poiFetchSeq;
  poiInFlightKey = cacheKey;
+ try {
+ var index = await loadPoiStaticIndex();
+ if (index) {
+ await renderStaticPois(bounds, activeKeys, index, fetchSeq);
+ if (fetchSeq === poiFetchSeq) poiLoadedKey = cacheKey;
+ return;
+ }
+ await loadPoiLayersViaOverpass(bounds, cacheKey, fetchSeq);
+ } finally {
+ if (poiInFlightKey === cacheKey) poiInFlightKey = null;
+ }
+ }
+
+ // Overpass-fallback: kaytossa vain jos staattinen aineisto puuttuu deploysta
+ async function loadPoiLayersViaOverpass(bounds, cacheKey, fetchSeq) {
  var storeKey = 'poicache:v1:' + cacheKey;
  try {
  var cached = await loadJSON(storeKey, null);
@@ -1489,8 +1577,6 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  poiFailNotified = true;
  showToast('Karttakohteiden haku (Overpass) ei onnistu juuri nyt');
  }
- } finally {
- if (poiInFlightKey === cacheKey) poiInFlightKey = null;
  }
  }
 
