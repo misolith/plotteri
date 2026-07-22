@@ -230,6 +230,12 @@
  .leaflet-control-layers, .leaflet-control-zoom a, .leaflet-control-scale-line {
  background: #0b232f !important; color: #d8e6ea !important; border-color: #163244 !important;
  }
+ .leaflet-control-attribution {
+ max-width: min(86vw, 430px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+ background: rgba(255,255,255,0.82) !important; color: #20343b !important;
+ border-radius: 0 8px 0 0; padding: 2px 7px !important; font-size: 10px !important;
+ }
+ .leaflet-control-attribution a { color: #174b6b !important; font-weight: 700; }
  .leaflet-bottom.leaflet-right { bottom: calc(82px + env(safe-area-inset-bottom)); }
 
  #day-chip { flex: 0 0 auto; white-space: nowrap; }
@@ -445,6 +451,11 @@
  <h3>Kalapaikat</h3>
  <ul id="waypoint-list"></ul>
  <p id="waypoint-empty" class="hint">Ei tallennettuja kalapaikkoja.</p>
+ </section>
+
+ <section>
+ <h3>Aineistolähteet</h3>
+ <p class="hint">Kartalla pidetään näkyvissä tiivis attribuutio. Täydet lähteet: OpenStreetMap contributors, Maanmittauslaitos, Liikenne- ja viestintävirasto, SYKE ja Ilmatieteen laitos. Traficom: Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.</p>
  </section>
 
  <section>
@@ -1112,6 +1123,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  // ---------- map ----------
  var map = L.map('map', { zoomControl: false, attributionControl: true }).setView([63.5, 27.0], 5);
+ if (map.attributionControl) map.attributionControl.setPrefix(false);
 
  function mmlTileUrl() {
  var key = settings.apiKey || 'YOUR_API_KEY';
@@ -1122,16 +1134,17 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  maxZoom: 18,
  maxNativeZoom: 15,
  tileSize: 256,
- attribution: 'Maanmittauslaitos',
+ attribution: 'MML',
  errorTileUrl: TRANSPARENT_PX
  });
 
  var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
  maxZoom: 19,
- attribution: 'OpenStreetMap'
+ attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a>'
  });
 
- var TRAFICOM_ATTRIBUTION = 'Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.';
+ var TRAFICOM_FULL_ATTRIBUTION = 'Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.';
+ var TRAFICOM_ATTRIBUTION = 'Traficom: ei navigointiin';
  var traficomChartLayer = L.tileLayer(
  'https://julkinen.traficom.fi/rasteripalvelu/wmts?request=GetTile&version=1.0.0&service=WMTS&layer=Traficom:Merikarttasarjat%20public&style=default&tilematrixset=WGS84_Pseudo-Mercator&TileMatrix=WGS84_Pseudo-Mercator:{z}&TileRow={y}&TileCol={x}&format=image/png',
  {
@@ -1151,7 +1164,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  version: '1.1.1',
  opacity: 0.72,
  maxZoom: 18,
- attribution: 'Syke'
+ attribution: 'SYKE'
  });
 
  var rainRadarLayer = L.tileLayer.wms('https://openwms.fmi.fi/geoserver/wms', {
@@ -1163,7 +1176,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  opacity: 0.72,
  zIndex: 450,
  maxZoom: 18,
- attribution: 'FMI sadetutka'
+ attribution: 'FMI'
  });
 
  var vesijarviDepthLayer = L.geoJSON(null, {
@@ -2072,7 +2085,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
  ', ruudukko ' + a.nx + '×' + a.ny +
  (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
- (usesTraficom ? ' ' + TRAFICOM_ATTRIBUTION : ''));
+ (usesTraficom ? ' ' + TRAFICOM_FULL_ATTRIBUTION : ''));
  drawIndexOverlay(a);
  return a;
  }
