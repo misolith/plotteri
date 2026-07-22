@@ -1917,7 +1917,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  type: 'build',
  west: snap.west, south: snap.south, east: snap.east, north: snap.north,
  cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
- wind: currentWind, windKey: windAnalysisKey()
+ wind: effectiveAnalysisWind(), windKey: windAnalysisKey()
  }, sp), function (p) {
  if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
  });
@@ -1948,7 +1948,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  contours: Array.from(contourById.values()),
  bands: Array.from(bandById.values()),
  soundings: Array.from(soundingById.values()),
- wind: currentWind,
+ wind: effectiveAnalysisWind(),
  traits: sp.traits,
  thermoDepthM: sp.thermoDepthM,
  lightShiftM: sp.lightShiftM,
@@ -1967,8 +1967,46 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return a;
  }
 
+ // 6 h vektorikeskituuli: kaantyileva tuuli kumoutuu keskiarvossa, mika vastaa
+ // sita etta syottikalan kasautuminen vaatii pysyvaa suuntaa
+ var sustainedWind = null;
+ function updateSustainedWind(timesMs, speeds, dirs) {
+ if (!timesMs.length || !speeds.length) return;
+ var nowMs = Date.now();
+ var best = -1, bestDiff = Infinity;
+ for (var i = 0; i < timesMs.length; i++) {
+ var diff = Math.abs(timesMs[i] - nowMs);
+ if (diff < bestDiff) { bestDiff = diff; best = i; }
+ }
+ if (best < 0) return;
+ var ux = 0, vy = 0, n = 0;
+ for (var j = Math.max(0, best - 5); j <= best; j++) {
+ var sp = Number(speeds[j]), dr = Number(dirs[j]);
+ if (!isFinite(sp) || !isFinite(dr)) continue;
+ var rad = dr * Math.PI / 180;
+ ux += sp * Math.sin(rad);
+ vy += sp * Math.cos(rad);
+ n++;
+ }
+ if (!n) return;
+ sustainedWind = {
+ speed: Math.sqrt(ux * ux + vy * vy) / n,
+ direction: (Math.atan2(ux, vy) * 180 / Math.PI + 360) % 360,
+ t: Date.now()
+ };
+ onWindUpdated();
+ }
+
+ function effectiveAnalysisWind() {
+ if (sustainedWind && Date.now() - sustainedWind.t < 2 * 3600000) {
+ return { speed: sustainedWind.speed, direction: sustainedWind.direction };
+ }
+ return currentWind;
+ }
+
  function windAnalysisKey() {
- return currentWind ? Math.round(currentWind.direction / 15) + ':' + Math.round(currentWind.speed) : 'none';
+ var w = effectiveAnalysisWind();
+ return w ? Math.round(w.direction / 15) + ':' + Math.round(w.speed) : 'none';
  }
  var lastAnalysisParamsKey = null;
  var traficomAttribOn = false;
@@ -2136,7 +2174,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  try {
  var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat.toFixed(2)) +
  '&longitude=' + encodeURIComponent(lon.toFixed(2)) +
- '&hourly=pressure_msl&past_days=1&forecast_days=1&timeformat=unixtime';
+ '&hourly=pressure_msl,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&past_days=1&forecast_days=1&timeformat=unixtime';
  var res = await fetch(url, { cache: 'no-store' });
  if (!res.ok) throw new Error('conditions status ' + res.status);
  var data = await res.json();
@@ -2145,6 +2183,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var trend = pressureTrend(times, press, new Date());
  lastDayScore = dayScore({ trend: trend, SunCalc: window.SunCalc, now: new Date(), lat: lat, lon: lon });
  updateDayChipUI();
+ updateSustainedWind(times, data.hourly && data.hourly.wind_speed_10m || [], data.hourly && data.hourly.wind_direction_10m || []);
  } catch (e) {
  console.warn('Olosuhdehaku epäonnistui:', e);
  }

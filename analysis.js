@@ -7,9 +7,16 @@ export var SCORE_WEIGHTS = {
   wind: 0.35,
   depthPref: 0.20,
   slopeNormPerMeter: 0.08,
-  windMinMs: 1.0,
-  windFullMs: 7.0,
-  shoreSplatCells: 8,
+  // tuulen voimakkuusvaste: nousu 2->5 m/s, taso 5->8, lasku 8->14 (sekoittuminen)
+  windMinMs: 2.0,
+  windFullMs: 5.0,
+  windFadeMs: 8.0,
+  windMaxMs: 14.0,
+  windFloor: 0.2,
+  shoreSplatMeters: 250,
+  // pyyhkaisymatka: tayteen vaikutukseen tarvitaan ~2 km avovetta tuulen puolella
+  fetchSaturateM: 2000,
+  fetchMaxM: 2500,
   minScoreToShow: 0.12
 };
 
@@ -322,13 +329,36 @@ export function buildAnalysis(input) {
   var windExp = new Float32Array(nx * ny);
   var windScale = 0;
   if (wind && isFinite(wind.speed) && isFinite(wind.direction)) {
-    windScale = Math.max(0, Math.min(1, (wind.speed - weights.windMinMs) / (weights.windFullMs - weights.windMinMs)));
+    var ws = wind.speed;
+    if (ws <= weights.windMinMs) windScale = 0;
+    else if (ws < weights.windFullMs) windScale = (ws - weights.windMinMs) / (weights.windFullMs - weights.windMinMs);
+    else if (ws <= weights.windFadeMs) windScale = 1;
+    else windScale = Math.max(weights.windFloor,
+      1 - (ws - weights.windFadeMs) / (weights.windMaxMs - weights.windFadeMs) * (1 - weights.windFloor));
   }
   if (windScale > 0) {
     var windToRad = ((wind.direction + 180) % 360) * Math.PI / 180;
     var wvx = Math.sin(windToRad);
     var wvy = Math.cos(windToRad);
-    var splatR = weights.shoreSplatCells;
+    // vaikutuskaista rannasta metreina, ei soluina (muuten leveys riippuisi zoomista)
+    var splatR = Math.max(2, Math.round(weights.shoreSplatMeters / cellM));
+    // pyyhkaisymatka: askella tuulta vastaan ja mittaa avoveden matka;
+    // extentin ulkopuoli tulkitaan avovedeksi (ei rangaista reunoja)
+    var maxFetchSteps = Math.ceil(weights.fetchMaxM / cellM);
+    var upLonStep = -wvx * cellM / mPerLon;
+    var upLatStep = -wvy * cellM / mPerLat;
+    var fetchFactor = function (lon, lat) {
+      var px = lon, py = lat;
+      var steps = 0;
+      for (var k = 0; k < maxFetchSteps; k++) {
+        px += upLonStep;
+        py += upLatStep;
+        if (px < west || px > east || py < south || py > north) { steps = maxFetchSteps; break; }
+        if (isNaN(sampleDepth(px, py))) { steps = k; break; }
+        steps = k + 1;
+      }
+      return Math.min(1, steps * cellM / weights.fetchSaturateM);
+    };
     // rantaviiva: 0-kayrat (SYKE-jarvet); merella niita ei ole, joten
     // fallbackina 0-alkuisten syvyysalueiden reunat (Traficom DRVAL1=0)
     var shoreLines = [];
@@ -358,6 +388,8 @@ export function buildAnalysis(input) {
           var landNx = -waterSign * n1x, landNy = -waterSign * n1y;
           var facing = wvx * landNx + wvy * landNy;
           if (facing < 0.25) continue;
+          var fetchF = fetchFactor(mx, my);
+          if (fetchF < 0.05) continue;
           var cgx = Math.round((mx - west) / cellLon);
           var cgy = Math.round((my - south) / cellLat);
           for (var sy = -splatR; sy <= splatR; sy++) {
@@ -368,7 +400,7 @@ export function buildAnalysis(input) {
               if (!mask[pidx]) continue;
               var dist = Math.sqrt(sx * sx + sy * sy);
               if (dist > splatR) continue;
-              var val = facing * (1 - dist / splatR);
+              var val = facing * fetchF * (1 - dist / splatR);
               if (val > windExp[pidx]) windExp[pidx] = val;
             }
           }
@@ -394,7 +426,8 @@ export function buildAnalysis(input) {
 
   var score = new Float32Array(nx * ny);
   var wSlope = weights.slope * (traits ? traits.structureAffinity : 1);
-  var wWind = (windScale > 0 ? weights.wind : 0) * (traits ? traits.shoreAffinity : 1);
+  // paino kasvaa windScalen mukana: heikko tuuli ei pudota muiden signaalien osuutta kertarysayksella
+  var wWind = weights.wind * windScale * (traits ? traits.shoreAffinity : 1);
   var wPref = weights.depthPref;
   var wSum = wSlope + wWind + wPref;
   var hasAny = false;
@@ -408,7 +441,7 @@ export function buildAnalysis(input) {
     var pref = isPelagic
       ? pelagicPreference(depth[idx], thermoDepthM, (traits.thermoOffsetM || 0) - effShift)
       : depthPreference(depth[idx], traits ? traits.depth : null, effShift, strat);
-    var s = (wSlope * slopeN + wWind * windExp[idx] * windScale + wPref * pref) / wSum;
+    var s = (wSlope * slopeN + wWind * windExp[idx] + wPref * pref) / wSum;
     score[idx] = s;
     if (s >= weights.minScoreToShow) hasAny = true;
   }
