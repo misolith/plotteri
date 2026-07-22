@@ -226,6 +226,10 @@
  .poi-shelter { background: #8ed1a8; }
  .poi-fuel { background: #f3d76d; }
  .poi-terrace { background: #69c7dc; }
+ .poi-slipway { background: #c792ea; }
+ .poi-marina { background: #6fa8ff; }
+ .poi-water { background: #5fe0c8; }
+ .poi-mooring { background: #f78fb3; }
 
  .leaflet-control-layers, .leaflet-control-zoom a, .leaflet-control-scale-line {
  background: #0b232f !important; color: #d8e6ea !important; border-color: #163244 !important;
@@ -420,6 +424,10 @@
 
  <section>
  <h3>Karttakohteet</h3>
+ <label class="settings-row">
+ <span>📍 Karttakohteet kartalle</span>
+ <input id="poi-master-toggle" type="checkbox" checked>
+ </label>
  <div class="poi-settings">
  <label class="poi-toggle-row">
  <span class="poi-toggle-label"><span class="poi-marker poi-firepit">🔥</span><span>Nuotiopaikat</span></span>
@@ -437,8 +445,24 @@
  <span class="poi-toggle-label"><span class="poi-marker poi-terrace">☕</span><span>Terassit</span></span>
  <input class="poi-toggle" type="checkbox" data-poi="terrace" checked>
  </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-slipway">🚤</span><span>Veneenlaskupaikat</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="slipway" checked>
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-marina">⚓</span><span>Satamat</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="marina" checked>
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-water">🚰</span><span>Vesipisteet</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="water">
+ </label>
+ <label class="poi-toggle-row">
+ <span class="poi-toggle-label"><span class="poi-marker poi-mooring">🛟</span><span>Kiinnitys- ja ankkuripaikat</span></span>
+ <input class="poi-toggle" type="checkbox" data-poi="mooring">
+ </label>
  </div>
- <p class="hint">OSM-kohteet latautuvat nykyisestä karttanäkymästä lähizoomilla.</p>
+ <p class="hint">Kohteet latautuvat appin mukana jaettavasta aineistosta näkymän mukaan lähizoomilla. Kartan layer-valitsimen Karttakohteet-rasti näyttää/piilottaa kaikki kerralla.</p>
  </section>
 
  <section>
@@ -734,6 +758,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var tileCacheClear = document.getElementById('tile-cache-clear');
  var tileCacheStatus = document.getElementById('tile-cache-status');
  var poiToggleInputs = Array.prototype.slice.call(document.querySelectorAll('.poi-toggle'));
+ var poiMasterToggle = document.getElementById('poi-master-toggle');
  var trackListEl = document.getElementById('track-list');
  var trackEmpty = document.getElementById('track-empty');
  var waypointListEl = document.getElementById('waypoint-list');
@@ -759,7 +784,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var toastEl = document.getElementById('toast');
 
  // ---------- state ----------
- var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true };
+ var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true, slipway: true, marina: true, water: false, mooring: false };
  var defaultTileCache = { enabled: true, maxTiles: 600, ttlDays: 7 };
  var municipalityNames = {
  '5': 'Alajärvi',
@@ -1091,6 +1116,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (settings.sykeVisible == null) settings.sykeVisible = true;
  if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
  if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
+ if (settings.poiMasterVisible == null) settings.poiMasterVisible = true;
  if (!(settings.exaggeration3d >= 1 && settings.exaggeration3d <= 10)) settings.exaggeration3d = 8;
  settings.tileCache = Object.assign({}, defaultTileCache, settings.tileCache || {});
  var tracks = await loadJSON('tracks', []);
@@ -1212,25 +1238,43 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  firepit: L.layerGroup(),
  shelter: L.layerGroup(),
  fuel: L.layerGroup(),
- terrace: L.layerGroup()
+ terrace: L.layerGroup(),
+ slipway: L.layerGroup(),
+ marina: L.layerGroup(),
+ water: L.layerGroup(),
+ mooring: L.layerGroup()
  };
+ // master-ryhma: yksi rasti layer-valitsimessa, kategoriat asetuspaneelissa
+ var poiMasterLayer = L.layerGroup();
  var poiLayerLabels = {
  firepit: 'Nuotiopaikka',
  shelter: 'Laavu',
  fuel: 'Bensa',
- terrace: 'Terassi'
+ terrace: 'Terassi',
+ slipway: 'Veneenlasku',
+ marina: 'Satama',
+ water: 'Vesipiste',
+ mooring: 'Kiinnityspaikka'
  };
  var poiIcons = {
  firepit: '🔥',
  shelter: '⌂',
  fuel: '⛽',
- terrace: '☕'
+ terrace: '☕',
+ slipway: '🚤',
+ marina: '⚓',
+ water: '🚰',
+ mooring: '🛟'
  };
  var poiClasses = {
  firepit: 'poi-firepit',
  shelter: 'poi-shelter',
  fuel: 'poi-fuel',
- terrace: 'poi-terrace'
+ terrace: 'poi-terrace',
+ slipway: 'poi-slipway',
+ marina: 'poi-marina',
+ water: 'poi-water',
+ mooring: 'poi-mooring'
  };
  var poiOverpassEndpoints = [
  'https://overpass-api.de/api/interpreter',
@@ -1270,8 +1314,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  saveJSON('settings', settings);
  });
  Object.keys(poiLayers).forEach(function (key) {
- if (settings.poiVisibility[key] !== false) poiLayers[key].addTo(map);
+ if (settings.poiVisibility[key] !== false) poiMasterLayer.addLayer(poiLayers[key]);
  });
+ if (settings.poiMasterVisible !== false) poiMasterLayer.addTo(map);
 
  L.control.layers(
  { 'MML Maastokartta': mmlLayer, 'OpenStreetMap': osmLayer, 'Traficom merikartta': traficomChartLayer },
@@ -1280,10 +1325,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  'SYKE syvyydet': sykeDepthLayer,
  'Vesijarvi syvyysalueet': vesijarviDepthLayer,
  'FMI sadetutka': rainRadarLayer,
- 'Nuotiopaikat': poiLayers.firepit,
- 'Laavut': poiLayers.shelter,
- 'Bensa-asemat': poiLayers.fuel,
- 'Terassit': poiLayers.terrace
+ 'Karttakohteet': poiMasterLayer
  },
  { position: 'bottomright', collapsed: true }
  ).addTo(map);
@@ -1341,10 +1383,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function setPoiLayerVisible(key, visible, persist) {
  settings.poiVisibility[key] = !!visible;
- if (visible && !map.hasLayer(poiLayers[key])) poiLayers[key].addTo(map);
- if (!visible && map.hasLayer(poiLayers[key])) {
+ if (visible && !poiMasterLayer.hasLayer(poiLayers[key])) poiMasterLayer.addLayer(poiLayers[key]);
+ if (!visible && poiMasterLayer.hasLayer(poiLayers[key])) {
  poiLayers[key].clearLayers();
- map.removeLayer(poiLayers[key]);
+ poiMasterLayer.removeLayer(poiLayers[key]);
  }
  syncPoiToggleInputs();
  if (persist) await saveJSON('settings', settings);
@@ -1365,6 +1407,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!tags) return null;
  if (tags.leisure === 'firepit' || tags.amenity === 'bbq') return 'firepit';
  if (tags.tourism === 'wilderness_hut' || tags.tourism === 'picnic_site' || (tags.amenity === 'shelter' && (!tags.shelter_type || tags.shelter_type !== 'public_transport'))) return 'shelter';
+ if (tags.leisure === 'slipway') return 'slipway';
+ if (tags.leisure === 'marina') return 'marina';
+ if (tags.amenity === 'drinking_water') return 'water';
+ if (tags['seamark:type'] === 'anchorage' || (tags.mooring && tags.mooring !== 'no' && tags.mooring !== 'private')) return 'mooring';
  if (tags.amenity === 'fuel' || tags.waterway === 'fuel') return 'fuel';
  if (tags.leisure === 'outdoor_seating' || tags.amenity === 'biergarten' || tags.outdoor_seating === 'yes') return 'terrace';
  return null;
@@ -1410,6 +1456,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  'nwr' + bbox + '[outdoor_seating=yes];',
  'nwr' + bbox + '[amenity=biergarten];',
  'nwr' + bbox + '[leisure=outdoor_seating];',
+ 'nwr' + bbox + '[leisure=slipway];',
+ 'nwr' + bbox + '[leisure=marina];',
+ 'nwr' + bbox + '[amenity=drinking_water];',
+ 'nwr' + bbox + '[mooring];',
+ 'nwr' + bbox + '["seamark:type"=anchorage];',
  ');',
  'out center tags 180;'
  ].join('');
@@ -1445,6 +1496,79 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  throw lastError || new Error('overpass unavailable');
  }
 
+ // ---------- staattinen POI-aineisto (pois/, generoidaan scripts/update-pois.mjs) ----------
+ var POI_STATIC_MEM_MAX = 40;
+ var POI_RENDER_CAP = 500;
+ var poiStaticIndex; // undefined = ei viela haettu, null = ei saatavilla
+ var poiStaticChunks = new Map();
+
+ async function loadPoiStaticIndex() {
+ if (poiStaticIndex !== undefined) return poiStaticIndex;
+ try {
+ var res = await fetch('pois/index.json', { cache: 'no-cache' });
+ poiStaticIndex = res.ok ? await res.json() : null;
+ } catch (e) {
+ poiStaticIndex = null;
+ }
+ if (!poiStaticIndex || !poiStaticIndex.cells) {
+ poiStaticIndex = null;
+ console.info('Staattista POI-aineistoa ei löytynyt, käytetään Overpass-fallbackia.');
+ }
+ return poiStaticIndex;
+ }
+
+ async function getPoiStaticChunk(key) {
+ if (poiStaticChunks.has(key)) return poiStaticChunks.get(key);
+ var elements = null;
+ try {
+ var res = await fetch('pois/' + key + '.json', { cache: 'default' });
+ if (res.ok) elements = await res.json();
+ } catch (e) { /* verkkovirhe: solu jaa tyhjaksi talla kertaa */ }
+ poiStaticChunks.delete(key);
+ poiStaticChunks.set(key, elements);
+ while (poiStaticChunks.size > POI_STATIC_MEM_MAX) {
+ poiStaticChunks.delete(poiStaticChunks.keys().next().value);
+ }
+ return elements;
+ }
+
+ async function renderStaticPois(bounds, activeKeys, index, fetchSeq) {
+ var keys = [];
+ var la0 = Math.floor(bounds.getSouth() / index.cellLatDeg);
+ var la1 = Math.floor(bounds.getNorth() / index.cellLatDeg);
+ var lo0 = Math.floor(bounds.getWest() / index.cellLonDeg);
+ var lo1 = Math.floor(bounds.getEast() / index.cellLonDeg);
+ for (var a = la0; a <= la1; a++) {
+ for (var o = lo0; o <= lo1; o++) {
+ var key = 'p_' + a + '_' + o;
+ if (index.cells[key]) keys.push(key);
+ }
+ }
+ var chunks = await Promise.all(keys.map(getPoiStaticChunk));
+ if (fetchSeq !== poiFetchSeq) return;
+ var kinds = index.kinds || ['firepit', 'shelter', 'fuel', 'terrace'];
+ var activeSet = {};
+ activeKeys.forEach(function (k) { activeSet[k] = true; });
+ Object.keys(poiLayers).forEach(function (k) { poiLayers[k].clearLayers(); });
+ var west = bounds.getWest(), south = bounds.getSouth(), east = bounds.getEast(), north = bounds.getNorth();
+ var added = 0;
+ for (var ci = 0; ci < chunks.length && added < POI_RENDER_CAP; ci++) {
+ var elements = chunks[ci];
+ if (!elements) continue;
+ for (var i = 0; i < elements.length && added < POI_RENDER_CAP; i++) {
+ var el = elements[i];
+ var kind = kinds[el[0]];
+ if (!kind || !activeSet[kind] || !map.hasLayer(poiLayers[kind])) continue;
+ if (el[1] < south || el[1] > north || el[2] < west || el[2] > east) continue;
+ var tags = { name: el[3] || '', operator: el[4] || '', opening_hours: el[5] || '', website: el[6] || '' };
+ L.marker([el[1], el[2]], { icon: poiIcon(kind) })
+ .bindPopup(poiPopupHtml(kind, tags))
+ .addTo(poiLayers[kind]);
+ added++;
+ }
+ }
+ }
+
  async function loadPoiLayers() {
  var activeKeys = activePoiLayerKeys();
  if (!activeKeys.length) return;
@@ -1463,6 +1587,21 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (cacheKey === poiLoadedKey || cacheKey === poiInFlightKey) return;
  var fetchSeq = ++poiFetchSeq;
  poiInFlightKey = cacheKey;
+ try {
+ var index = await loadPoiStaticIndex();
+ if (index) {
+ await renderStaticPois(bounds, activeKeys, index, fetchSeq);
+ if (fetchSeq === poiFetchSeq) poiLoadedKey = cacheKey;
+ return;
+ }
+ await loadPoiLayersViaOverpass(bounds, cacheKey, fetchSeq);
+ } finally {
+ if (poiInFlightKey === cacheKey) poiInFlightKey = null;
+ }
+ }
+
+ // Overpass-fallback: kaytossa vain jos staattinen aineisto puuttuu deploysta
+ async function loadPoiLayersViaOverpass(bounds, cacheKey, fetchSeq) {
  var storeKey = 'poicache:v1:' + cacheKey;
  try {
  var cached = await loadJSON(storeKey, null);
@@ -1489,8 +1628,6 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  poiFailNotified = true;
  showToast('Karttakohteiden haku (Overpass) ei onnistu juuri nyt');
  }
- } finally {
- if (poiInFlightKey === cacheKey) poiInFlightKey = null;
  }
  }
 
@@ -1512,16 +1649,22 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setPoiLayerVisible(input.dataset.poi, input.checked, true);
  });
  });
+ poiMasterToggle.addEventListener('change', async function () {
+ settings.poiMasterVisible = poiMasterToggle.checked;
+ if (settings.poiMasterVisible && !map.hasLayer(poiMasterLayer)) poiMasterLayer.addTo(map);
+ if (!settings.poiMasterVisible && map.hasLayer(poiMasterLayer)) map.removeLayer(poiMasterLayer);
+ await saveJSON('settings', settings);
+ refreshPoiLayers();
+ });
+ poiMasterToggle.checked = settings.poiMasterVisible !== false;
  syncPoiToggleInputs();
 
  map.on('moveend zoomend', refreshPoiLayers);
  map.on('overlayadd overlayremove', function (e) {
- Object.keys(poiLayers).forEach(function (key) {
- if (e.layer !== poiLayers[key]) return;
- settings.poiVisibility[key] = e.type === 'overlayadd';
- syncPoiToggleInputs();
+ if (e.layer !== poiMasterLayer) return;
+ settings.poiMasterVisible = e.type === 'overlayadd';
+ if (poiMasterToggle) poiMasterToggle.checked = settings.poiMasterVisible;
  saveJSON('settings', settings);
- });
  refreshPoiLayers();
  });
  refreshPoiLayers();
