@@ -1110,6 +1110,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  poiVisibility: defaultPoiVisibility,
  radarVisible: true,
  indexVisible: false,
+ tracksVisible: true,
  baseLayer: null,
  sykeVisible: true,
  vesijarviVisible: false,
@@ -1119,6 +1120,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  settings.poiVisibility = Object.assign({}, defaultPoiVisibility, settings.poiVisibility || {});
  if (settings.radarVisible == null) settings.radarVisible = true;
  if (settings.indexVisible == null) settings.indexVisible = false;
+ if (settings.tracksVisible == null) settings.tracksVisible = true;
  if (settings.sykeVisible == null) settings.sykeVisible = true;
  if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
  if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
@@ -1233,6 +1235,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  });
 
  var fishIndexLayer = L.layerGroup();
+ var savedTracksLayer = L.layerGroup();
  fishIndexLayer.on('add', function () {
  if (map.attributionControl) map.attributionControl.addAttribution(TRAFICOM_ATTRIBUTION);
  });
@@ -1307,6 +1310,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  if (settings.radarVisible !== false) rainRadarLayer.addTo(map);
  if (settings.indexVisible) fishIndexLayer.addTo(map);
+ if (settings.tracksVisible !== false) savedTracksLayer.addTo(map);
 
  map.on('baselayerchange', function (e) {
  settings.baseLayer = e.layer === mmlLayer ? 'mml' : e.layer === traficomChartLayer ? 'traficom' : 'osm';
@@ -1316,6 +1320,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var visible = e.type === 'overlayadd';
  if (e.layer === sykeDepthLayer) settings.sykeVisible = visible;
  else if (e.layer === vesijarviDepthLayer) settings.vesijarviVisible = visible;
+ else if (e.layer === savedTracksLayer) settings.tracksVisible = visible;
  else return;
  saveJSON('settings', settings);
  });
@@ -1331,6 +1336,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  'SYKE syvyydet': sykeDepthLayer,
  'Vesijarvi syvyysalueet': vesijarviDepthLayer,
  'FMI sadetutka': rainRadarLayer,
+ 'Tallennetut reitit': savedTracksLayer,
  'Karttakohteet': poiMasterLayer
  },
  { position: 'bottomright', collapsed: true }
@@ -2992,7 +2998,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!trk._line) {
  trk._line = makeSpeedTrackLayer(trk.points, { weight: 3, opacity: 0.85 });
  }
- trk._line.addTo(map);
+ if (!savedTracksLayer.hasLayer(trk._line)) savedTracksLayer.addLayer(trk._line);
  });
  }
 
@@ -3000,14 +3006,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!e.target.classList.contains('track-toggle')) return;
  var trk = tracks.find(function (t) { return t.id === e.target.dataset.id; });
  if (!trk) return;
- if (e.target.checked) trk._line.addTo(map); else map.removeLayer(trk._line);
+ if (e.target.checked) savedTracksLayer.addLayer(trk._line); else savedTracksLayer.removeLayer(trk._line);
  });
 
  trackListEl.addEventListener('click', async function (e) {
  if (!e.target.classList.contains('trk-del')) return;
  var id = e.target.dataset.id;
  var trk = tracks.find(function (t) { return t.id === id; });
- if (trk && trk._line) map.removeLayer(trk._line);
+ if (trk && trk._line) savedTracksLayer.removeLayer(trk._line);
  tracks = tracks.filter(function (t) { return t.id !== id; });
  await saveJSON('tracks', tracks);
  renderTrackList();

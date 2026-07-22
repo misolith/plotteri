@@ -8,7 +8,7 @@ Tuotanto: https://lith.fi/map/
 
 - Leaflet-kartta MML:n maastokartalla, OpenStreetMapilla, Traficomin merikartalla ja SYKE:n syvyyskerroksilla.
 - GPS-seuranta nopeudella, suunnalla, tarkkuudella, wake lockilla ja reitin tallennuksella.
-- Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella.
+- Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella. Reitit näkyvät kartalla oletuksena omana layerinään.
 - Reittien ja kalapaikkojen GeoJSON-vienti ja -tuonti laitteelta toiselle siirtymistä varten.
 - Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
 - Kalapaikka-indeksi: SYKEn vektorimuotoisesta järvisyvyysdatasta laskettu karttataso, joka korostaa syvänteiden reunat ja tuulen altistamat rannat.
