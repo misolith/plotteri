@@ -2502,6 +2502,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  updateInstallAppUi();
  });
 
+ if ('serviceWorker' in navigator) {
+ window.addEventListener('load', function () {
+ navigator.serviceWorker.register('map-sw.js').catch(function (e) {
+ console.warn('Service workerin rekisteröinti ei onnistunut:', e);
+ });
+ });
+ }
+
  installAppBtn.addEventListener('click', async function () {
  if (isStandaloneApp()) {
  updateInstallAppUi();
