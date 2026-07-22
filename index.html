@@ -140,6 +140,10 @@
  }
  .settings-row:last-child { border-bottom: 0; }
  .settings-row label { font-size: 14px; color: #d8e6ea; }
+ .settings-row select {
+ background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 8px; font-size: 14px;
+ }
  .settings-row input[type="number"] {
  width: 92px; background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
  border-radius: 8px; padding: 8px; font-size: 14px;
@@ -367,6 +371,16 @@
  <span>🎯 Kalapaikka-indeksi kartalle</span>
  <input id="index-toggle" type="checkbox">
  </label>
+ <div class="settings-row">
+ <label for="species-select">Kohdelaji</label>
+ <select id="species-select">
+ <option value="hauki">Hauki</option>
+ <option value="kuha">Kuha</option>
+ <option value="ahven">Ahven</option>
+ <option value="muikku">Muikku</option>
+ <option value="silakka">Silakka</option>
+ </select>
+ </div>
  <div class="cache-actions">
  <button id="btn-3d">3D-syvyysnäkymä</button>
  <button id="depth-cache-clear">Tyhjennä syvyyscache</button>
@@ -470,7 +484,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS } from './analysis.js';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js';
 
 (async function () {
  'use strict';
@@ -727,6 +741,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var dayTimes = document.getElementById('day-times');
  var dayClose = document.getElementById('day-close');
  var indexToggle = document.getElementById('index-toggle');
+ var speciesSelect = document.getElementById('species-select');
  var btn3d = document.getElementById('btn-3d');
  var depthCacheClear = document.getElementById('depth-cache-clear');
  var depthStatus = document.getElementById('depth-status');
@@ -1064,6 +1079,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (settings.indexVisible == null) settings.indexVisible = false;
  if (settings.sykeVisible == null) settings.sykeVisible = true;
  if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
+ if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
  if (!(settings.exaggeration3d >= 1 && settings.exaggeration3d <= 10)) settings.exaggeration3d = 8;
  settings.tileCache = Object.assign({}, defaultTileCache, settings.tileCache || {});
  var tracks = await loadJSON('tracks', []);
@@ -1847,6 +1863,36 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return z >= 14 ? 50 : z >= 13 ? 100 : 200;
  }
 
+ // ---------- lajin ja dynaamisten tekijoiden parametrit ----------
+ function lightShiftMeters(now, lat, lon) {
+ if (!window.SunCalc) return 0;
+ var altDeg = SunCalc.getPosition(now, lat, lon).altitude * 180 / Math.PI;
+ var bright = Math.max(0, Math.min(1, (altDeg + 6) / 26));
+ return (1 - bright) * 1.5; // max siirtyma metreina pimeaan
+ }
+
+ function currentSpeciesKey() {
+ return SPECIES_TRAITS[settings.species] ? settings.species : 'hauki';
+ }
+
+ function speciesBuildParams(centerLat, centerLon) {
+ var now = new Date();
+ var key = currentSpeciesKey();
+ return {
+ speciesKey: key,
+ traits: SPECIES_TRAITS[key],
+ thermoDepthM: estimateThermoclineDepth(now, centerLat),
+ lightShiftM: lightShiftMeters(now, centerLat, centerLon),
+ strat: stratificationFactor(now)
+ };
+ }
+
+ function analysisParamsKey() {
+ var center = map.getCenter();
+ var p = speciesBuildParams(center.lat, center.lng);
+ return windAnalysisKey() + '|' + p.speciesKey + '|' + Math.round(p.lightShiftM * 4) + '|' + Math.round(p.strat * 20);
+ }
+
  var ANALYSIS_ANCHOR_LAT = 62;
  function snapAnalysisBounds(bounds, cellM) {
  var cellLat = cellM / 111320;
@@ -1864,18 +1910,22 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function buildAnalysisForBounds(bounds, cellM) {
  var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
+ var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
  if (!analysisWorkerBroken) {
  try {
- var res = await workerRequest({
+ var res = await workerRequest(Object.assign({
  type: 'build',
  west: snap.west, south: snap.south, east: snap.east, north: snap.north,
  cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
  wind: currentWind, windKey: windAnalysisKey()
- }, function (p) {
+ }, sp), function (p) {
  if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
  });
  if (res.reason === 'toowide') return null;
- if (res.result) res.result.reqCellM = snap.cellM;
+ if (res.result) {
+ res.result.reqCellM = snap.cellM;
+ res.result.sources = res.sources || [];
+ }
  return res.result;
  } catch (e) {
  console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
@@ -1899,6 +1949,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  bands: Array.from(bandById.values()),
  soundings: Array.from(soundingById.values()),
  wind: currentWind,
+ traits: sp.traits,
+ thermoDepthM: sp.thermoDepthM,
+ lightShiftM: sp.lightShiftM,
+ strat: sp.strat,
  west: snap.west,
  south: snap.south,
  east: snap.east,
@@ -1906,14 +1960,25 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  cellLonDeg: snap.cellLon,
  cellLatDeg: snap.cellLat
  });
- if (a) a.reqCellM = snap.cellM;
+ if (a) {
+ a.reqCellM = snap.cellM;
+ a.sources = [];
+ }
  return a;
  }
 
  function windAnalysisKey() {
  return currentWind ? Math.round(currentWind.direction / 15) + ':' + Math.round(currentWind.speed) : 'none';
  }
- var lastAnalysisWindKey = null;
+ var lastAnalysisParamsKey = null;
+ var traficomAttribOn = false;
+
+ function setTraficomAttribution(on) {
+ if (on === traficomAttribOn) return;
+ traficomAttribOn = on;
+ if (on) map.attributionControl.addAttribution(TRAFICOM_ATTRIBUTION);
+ else map.attributionControl.removeAttribution(TRAFICOM_ATTRIBUTION);
+ }
 
  function analysisCoversView() {
  if (!lastAnalysis) return false;
@@ -1935,7 +2000,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return null;
  }
  if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
- lastAnalysisWindKey === windAnalysisKey() && analysisCoversView()) {
+ lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
  return lastAnalysis.hasData ? lastAnalysis : null;
  }
  var bounds = map.getBounds().pad(0.2);
@@ -1949,15 +2014,21 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var a = await buildAnalysisForBounds(bounds);
  if (seq !== depthBuildSeq) return null;
  lastAnalysis = a;
- lastAnalysisWindKey = windAnalysisKey();
+ lastAnalysisParamsKey = analysisParamsKey();
  if (!a || !a.hasData) {
  clearIndexOverlay();
+ setTraficomAttribution(false);
  setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE järville, Traficom merelle sekä Vuoksen ja Kymijoen vesistöihin).');
  if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
  return null;
  }
- setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä, ruudukko ' + a.nx + '×' + a.ny +
- (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).'));
+ var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
+ setTraficomAttribution(usesTraficom);
+ setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
+ (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
+ ', ruudukko ' + a.nx + '×' + a.ny +
+ (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
+ (usesTraficom ? ' ' + TRAFICOM_ATTRIBUTION : ''));
  drawIndexOverlay(a);
  return a;
  }
@@ -2133,6 +2204,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  indexToggle.addEventListener('change', function () {
  setFishIndexVisible(indexToggle.checked, true);
+ });
+ speciesSelect.addEventListener('change', async function () {
+ settings.species = SPECIES_TRAITS[speciesSelect.value] ? speciesSelect.value : 'hauki';
+ await saveJSON('settings', settings);
+ if (map.hasLayer(fishIndexLayer) || view3dHandle) runDepthWork(true);
  });
  btn3d.addEventListener('click', open3d);
  depthCacheClear.addEventListener('click', clearDepthCache);
@@ -2472,6 +2548,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  btnPanel.addEventListener('click', function () {
  apiKeyInput.value = settings.apiKey || '';
  indexToggle.checked = !!settings.indexVisible;
+ speciesSelect.value = currentSpeciesKey();
  updateDepthCacheStatus();
  panel.classList.remove('hidden');
  });
@@ -2837,6 +2914,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  updateHud();
  indexToggle.checked = !!settings.indexVisible;
+ speciesSelect.value = currentSpeciesKey();
  if (settings.indexVisible) scheduleDepthWork();
  window.__plotteri = {
  map: map,

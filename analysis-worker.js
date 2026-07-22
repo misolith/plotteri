@@ -13,7 +13,7 @@ var CACHE_MAX_BYTES = 12 * 1024 * 1024;
 var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
-var TILE_CACHE_PREFIX = 't:v2:';
+var TILE_CACHE_PREFIX = 't:v3:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -155,8 +155,8 @@ async function fetchTile(key) {
       fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
     ]);
     if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
-    tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
-    tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
+    tile.c = tile.c.concat(tagSource(parseContours(await sykeResponses[0].json()), 'syke'));
+    tile.b = tile.b.concat(tagSource(parseBands(await sykeResponses[1].json()), 'syke'));
     if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
   } catch (e) {
     console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
@@ -168,18 +168,27 @@ async function fetchTile(key) {
       fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
       fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
     ]);
-    if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
+    var denied = traficomResponses.filter(function (r) { return r.status === 401 || r.status === 403; });
+    if (denied.length) {
+      console.info('Traficom: alue vaatii luvan (vapaa kattavuus: talousvyöhyke + Vuoksi + Kymijoki):', key);
+    } else if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
       throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
+    } else {
+      var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
+      tile.c = tile.c.concat(tagSource(parseContours(await traficomResponses[0].json()), 'traficom'));
+      tile.b = tile.b.concat(tagSource(parseBands(await traficomResponses[1].json()), 'traficom'));
+      tile.s = tile.s.concat(tagSource(parseSoundings(await traficomResponses[2].json()), 'traficom'));
+      if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
     }
-    var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
-    tile.c = tile.c.concat(parseContours(await traficomResponses[0].json()));
-    tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
-    tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
-    if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
   } catch (e) {
     console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
   }
   return tile;
+}
+
+function tagSource(features, source) {
+  features.forEach(function (f) { f.source = source; });
+  return features;
 }
 
 async function getTile(key) {
@@ -230,12 +239,14 @@ async function ensureTiles(keys, onProgress) {
 }
 
 async function handleBuild(msg) {
-  var cacheKey = [msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey].join('|');
+  var cacheKey = [msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
+    msg.speciesKey, Math.round((msg.lightShiftM || 0) * 10),
+    Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0)].join('|');
   var hit = resultCache.get(cacheKey);
   if (hit && Date.now() - hit.t < RESULT_TTL_MS) {
     resultCache.delete(cacheKey);
     resultCache.set(cacheKey, hit);
-    return { result: hit.result, cached: true };
+    return { result: hit.result, sources: hit.sources, cached: true };
   }
   var keys = tileKeysForBounds(msg);
   if (keys.length > MAX_TILES) return { result: null, reason: 'toowide' };
@@ -245,16 +256,22 @@ async function handleBuild(msg) {
   var contourById = new Map();
   var bandById = new Map();
   var soundingById = new Map();
+  var sourceSet = {};
   tiles.forEach(function (tile) {
-    (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
-    (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
-    (tile.s || []).forEach(function (s) { soundingById.set(s.id, s); });
+    (tile.c || []).forEach(function (c) { contourById.set((c.source || '') + ':' + c.id, c); });
+    (tile.b || []).forEach(function (b) { bandById.set((b.source || '') + ':' + b.id, b); });
+    (tile.s || []).forEach(function (s) { soundingById.set((s.source || '') + ':' + s.id, s); });
+    (tile.sources || []).forEach(function (src) { sourceSet[src] = true; });
   });
   var result = buildAnalysis({
     contours: Array.from(contourById.values()),
     bands: Array.from(bandById.values()),
     soundings: Array.from(soundingById.values()),
     wind: msg.wind,
+    traits: msg.traits,
+    thermoDepthM: msg.thermoDepthM,
+    lightShiftM: msg.lightShiftM,
+    strat: msg.strat,
     west: msg.west,
     south: msg.south,
     east: msg.east,
@@ -262,9 +279,10 @@ async function handleBuild(msg) {
     cellLonDeg: msg.cellLonDeg,
     cellLatDeg: msg.cellLatDeg
   });
-  resultCache.set(cacheKey, { t: Date.now(), result: result });
+  var sources = Object.keys(sourceSet);
+  resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
   while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
-  return { result: result };
+  return { result: result, sources: sources };
 }
 
 async function handleStatus() {

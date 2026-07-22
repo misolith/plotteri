@@ -22,8 +22,10 @@ Tuotanto: https://lith.fi/app/map/
 
 ## Kalapaikka-analyysi
 
-- Syvyysdata haetaan vektorina SYKEn `inspire_el`-WFS:stä (järvien syvyyskäyrät ja -vyöhykkeet, EPSG:3067). Kattaa vain luodatut järvet, ei merialueita.
-- Kalapaikka-indeksi (karttataso): syvänteen reunat (gradientti IDW-syvyysruudukosta), tuulen altistamat rannat (0-käyrän normaali vs. tuulen suunta) ja syvyysvyöhykepainotus. Painot ovat `analysis.js`:n `SCORE_WEIGHTS`-objektissa.
+- Syvyysdata haetaan vektorina kahdesta WFS-lähteestä: SYKEn `inspire_el` (järvien syvyyskäyrät ja -vyöhykkeet) ja Traficomin `inspirepalvelu/rajoitettu` (merialueen syvyyskäyrät, -alueet ja luotaukset; vapaa kattavuus talousvyöhyke + Vuoksen ja Kymijoen vesistöt). Molemmat: bbox EPSG:3067, ulostulo EPSG:4326.
+- Kalapaikka-indeksi (karttataso): syvänteen reunat (gradientti IDW-syvyysruudukosta), tuulen altistamat rannat (0-käyrän normaali vs. tuulen suunta; merellä rantaviiva syntetisoidaan DRVAL1=0-syvyysalueiden reunoista) ja lajikohtainen syvyyspainotus. Painot ovat `analysis.js`:n `SCORE_WEIGHTS`- ja `SPECIES_TRAITS`-objekteissa.
+- Kohdelaji valitaan asetuksista: pohjasuhteiset (hauki, kuha, ahven) käyttävät lajikohtaista syvyyspreferenssiä jota valoisuus (SunCalc) ja kerrostumiskausi siirtävät; pelagiset (muikku, silakka) pisteytetään termokliiniarvion tuntumaan, ja keväällä/syksyllä (ei kerrostumaa) niiden indeksi tyhjenee tarkoituksella. Termokliini on kalenteri+leveysaste-heuristiikka, ei mitattua lämpötilaa.
+- Kun indeksi käyttää Traficomin dataa, kartalla näytetään: "Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia."
 - Olosuhteet tänään (HUD-merkki): ilmanpaineen 3 h trendi (Open-Meteo) + kuunkierto ja parhaat ajat (SunCalc). Ei riipu sijainnista kartalla.
 - Syvyystiilet (6 km) cachetetaan IndexedDB:hen: TTL 30 pv, enintään 150 tiiltä / 12 Mt, LRU-siivous. Paneelissa tila ja tyhjennys.
 - 3D-näkymä rakennetaan samasta syvyysruudukosta; three.js ladataan cdnjs:stä vasta näkymää avattaessa.

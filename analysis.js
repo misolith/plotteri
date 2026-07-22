@@ -13,6 +13,15 @@ export var SCORE_WEIGHTS = {
   minScoreToShow: 0.12
 };
 
+// Lajikohtaiset piirteet. Numerot ovat lähtöarvauksia, kalibroitava kokemuksella.
+export var SPECIES_TRAITS = {
+  hauki:   { habitat: 'benthic', structureAffinity: 1.0,  shoreAffinity: 1.0, lightSens: 0.4, depth: { b0: 0.3, b1: 1.5, b2: 4, b3: 8 } },
+  kuha:    { habitat: 'benthic', structureAffinity: 1.0,  shoreAffinity: 0.7, lightSens: 0.9, depth: { b0: 1.0, b1: 3.5, b2: 8, b3: 15 } },
+  ahven:   { habitat: 'benthic', structureAffinity: 0.7,  shoreAffinity: 0.8, lightSens: 0.2, depth: { b0: 0.5, b1: 2,   b2: 6, b3: 10 } },
+  muikku:  { habitat: 'pelagic', structureAffinity: 0.05, shoreAffinity: 0.1, lightSens: 0.7, thermoOffsetM: -1 },
+  silakka: { habitat: 'pelagic', structureAffinity: 0.1,  shoreAffinity: 0.2, lightSens: 0.7, thermoOffsetM: -1 }
+};
+
 export var DAY_WEIGHTS = {
   pressureStable: 10,
   pressureSlowFall: 18,
@@ -314,9 +323,18 @@ export function buildAnalysis(input) {
     var wvx = Math.sin(windToRad);
     var wvy = Math.cos(windToRad);
     var splatR = weights.shoreSplatCells;
+    // rantaviiva: 0-kayrat (SYKE-jarvet); merella niita ei ole, joten
+    // fallbackina 0-alkuisten syvyysalueiden reunat (Traficom DRVAL1=0)
+    var shoreLines = [];
     contours.forEach(function (c) {
-      if (c.d !== 0) return;
-      c.lines.forEach(function (line) {
+      if (c.d === 0) shoreLines.push.apply(shoreLines, c.lines);
+    });
+    if (!shoreLines.length) {
+      bands.forEach(function (b) {
+        if (b.lo === 0) shoreLines.push.apply(shoreLines, b.rings);
+      });
+    }
+    shoreLines.forEach(function (line) {
         for (var i = 1; i < line.length; i++) {
           var ax = line[i - 1][0], ay = line[i - 1][1];
           var bx2 = line[i][0], by2 = line[i][1];
@@ -349,7 +367,6 @@ export function buildAnalysis(input) {
             }
           }
         }
-      });
     });
   }
 
@@ -361,9 +378,17 @@ export function buildAnalysis(input) {
   }
 
   // 6) yhdistetty indeksi; painot normalisoidaan aktiivisten signaalien yli
+  // ja skaalataan lajin habitaattipiirteilla (pelagisilla rakenne/ranta ~pois)
+  var traits = input.traits || null;
+  var thermoDepthM = input.thermoDepthM;
+  var lightShiftM = input.lightShiftM || 0;
+  var strat = input.strat || 0;
+  var isPelagic = traits && traits.habitat === 'pelagic';
+  var effShift = lightShiftM * (traits ? traits.lightSens : 1);
+
   var score = new Float32Array(nx * ny);
-  var wSlope = weights.slope;
-  var wWind = windScale > 0 ? weights.wind : 0;
+  var wSlope = weights.slope * (traits ? traits.structureAffinity : 1);
+  var wWind = (windScale > 0 ? weights.wind : 0) * (traits ? traits.shoreAffinity : 1);
   var wPref = weights.depthPref;
   var wSum = wSlope + wWind + wPref;
   var hasAny = false;
@@ -373,7 +398,9 @@ export function buildAnalysis(input) {
     if (!mask[idx]) continue;
     var slopeN = Math.min(1, slope[idx] / slopeNormEff);
     slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.8) / 1.7));
-    var pref = depthPreference(depth[idx]);
+    var pref = isPelagic
+      ? pelagicPreference(depth[idx], thermoDepthM, traits.thermoOffsetM)
+      : depthPreference(depth[idx], traits ? traits.depth : null, effShift, strat);
     var s = (wSlope * slopeN + wWind * windExp[idx] * windScale + wPref * pref) / wSum;
     score[idx] = s;
     if (s >= weights.minScoreToShow) hasAny = true;
@@ -388,12 +415,42 @@ export function buildAnalysis(input) {
   };
 }
 
-export function depthPreference(d) {
-  if (isNaN(d) || d <= 0.5) return 0;
-  if (d < 2.5) return (d - 0.5) / 2.0;
-  if (d <= 6) return 1;
-  if (d >= 12) return 0;
-  return (12 - d) / 6;
+// Kausikerroin: 0 = ei kerrostumaa (kevat/syksy/talvi), 1 = vahvin kerrostuma
+export function stratificationFactor(date) {
+  var start = new Date(date.getFullYear(), 0, 0);
+  var doy = Math.floor((date - start) / 86400000);
+  var v = 1 - Math.min(1, Math.abs(doy - 210) / 70); // huippu n. heinakuun lopulla
+  return Math.max(0, v);
+}
+
+// Karkea kalenteri+leveysaste-approksimaatio, ei mitattua lampotilaa
+export function estimateThermoclineDepth(date, lat) {
+  var strat = stratificationFactor(date);
+  if (strat <= 0) return null;
+  var latFactor = Math.max(0.3, Math.min(1, (66 - Math.abs(lat)) / 15));
+  return (2 + 5 * strat) * latFactor;
+}
+
+export function depthPreference(d, preset, shiftM, strat) {
+  var p = preset || SPECIES_TRAITS.hauki.depth;
+  var s = shiftM || 0;
+  var cap = 1 - 0.3 * (strat || 0); // kerrostuneena alusvesi vahemman kiinnostavaa
+  var b0 = Math.max(0.1, p.b0 - s);
+  var b1 = Math.max(b0 + 0.3, p.b1 - s);
+  var b2 = Math.max(b1 + 0.5, p.b2 - s);
+  var b3 = Math.max(b2 + 1, (p.b3 - s) * cap);
+  if (isNaN(d) || d <= b0) return 0;
+  if (d < b1) return (d - b0) / (b1 - b0);
+  if (d <= b2) return 1;
+  if (d >= b3) return 0;
+  return (b3 - d) / (b3 - b2);
+}
+
+export function pelagicPreference(d, thermoDepthM, thermoOffsetM) {
+  if (isNaN(d) || d <= 0.5 || thermoDepthM == null) return 0;
+  var target = Math.max(0.5, thermoDepthM + (thermoOffsetM || 0));
+  var dist = Math.abs(d - target);
+  return Math.max(0, 1 - dist / 4); // 4 m toleranssi
 }
 
 // ---------- paivakerroin: paine + kuu ----------
