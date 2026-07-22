@@ -151,6 +151,19 @@
  .settings-row input[type="checkbox"] {
  width: 22px; height: 22px; flex: 0 0 auto; accent-color: #e8a13c;
  }
+ .settings-details {
+ border-top: 1px solid #163244; border-bottom: 1px solid #163244; padding: 0;
+ }
+ .settings-details summary {
+ min-height: 42px; display: flex; align-items: center; justify-content: space-between;
+ cursor: pointer; color: #d8e6ea; font-size: 14px; list-style: none;
+ }
+ .settings-details summary::-webkit-details-marker { display: none; }
+ .settings-details summary::after {
+ content: "+"; color: #6f8e99; font-size: 18px; line-height: 1;
+ }
+ .settings-details[open] summary::after { content: "-"; }
+ .settings-details-body { padding: 0 0 12px; }
  .cache-actions { display: flex; gap: 8px; margin-top: 10px; }
  #place-results { list-style: none; margin: 10px 0 0; padding: 0; }
  .place-result {
@@ -210,6 +223,7 @@
  background: #163244; color: #d8e6ea; border: 1px solid #234a5f; border-radius: 8px;
  padding: 9px 16px; font-size: 14px;
  }
+ .search-modal { max-height: min(78vh, 620px); overflow-y: auto; }
  #wp-save { background: #e8a13c !important; color: #05141c !important; border: none !important; font-weight: 600; }
 
  .wp-dot {
@@ -350,20 +364,15 @@
  </div>
 
  <section>
- <h3>MML API-avain</h3>
+ <h3>Lisäasetukset</h3>
+ <details class="settings-details">
+ <summary>MML API-avain</summary>
+ <div class="settings-details-body">
  <input id="api-key-input" type="text" placeholder="Liitä API-avain tähän">
  <button id="api-key-save">Tallenna avain</button>
- <p class="hint">Ilmainen avain: Maanmittauslaitoksen OmaTili-palvelu. Ilman avainta karttana on OpenStreetMap-varakartta.</p>
- </section>
-
- <section id="place-search-section">
- <h3>Paikannimihaku</h3>
- <div class="inline-form">
- <input id="place-search-input" type="search" placeholder="Saari, lahti, selkä, kari...">
- <button id="place-search-btn">Hae</button>
+ <p class="hint">Ilmainen avain: Maanmittauslaitoksen OmaTili-palvelu. Ilman avainta karttana on OpenStreetMap-varakartta ja paikannimihaku ei ole käytössä.</p>
  </div>
- <ul id="place-results"></ul>
- <p id="place-search-status" class="hint">Haku käyttää MML:n nimistöpalvelua ja samaa API-avainta.</p>
+ </details>
  </section>
 
  <section>
@@ -505,6 +514,23 @@
  <input id="import-file-input" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden>
  <p id="import-status" class="hint">Tuonti lisää reitit ja kalapaikat nykyisten rinnalle.</p>
  </section>
+</div>
+
+<div id="search-modal" class="modal-overlay hidden">
+ <div class="modal search-modal">
+ <h3>Paikannimihaku</h3>
+ <div id="place-search-section">
+ <div class="inline-form">
+ <input id="place-search-input" type="search" placeholder="Saari, lahti, selkä, kari...">
+ <button id="place-search-btn">Hae</button>
+ </div>
+ <ul id="place-results"></ul>
+ <p id="place-search-status" class="hint">Haku käyttää MML:n nimistöpalvelua ja samaa API-avainta.</p>
+ </div>
+ <div class="modal-actions">
+ <button id="search-close">Sulje</button>
+ </div>
+ </div>
 </div>
 
 <div id="day-modal" class="modal-overlay hidden">
@@ -764,7 +790,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var btnPanel = document.getElementById('btn-panel');
  var panel = document.getElementById('panel');
  var panelClose = document.getElementById('panel-close');
- var placeSearchSection = document.getElementById('place-search-section');
+ var searchModal = document.getElementById('search-modal');
+ var searchClose = document.getElementById('search-close');
  var apiKeyInput = document.getElementById('api-key-input');
  var apiKeySave = document.getElementById('api-key-save');
  var placeSearchInput = document.getElementById('place-search-input');
@@ -2969,14 +2996,15 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  updateDepthCacheStatus();
  panel.classList.remove('hidden');
  });
- btnSearch.addEventListener('click', function () {
+ function openSearchModal() {
  apiKeyInput.value = settings.apiKey || '';
- panel.classList.remove('hidden');
+ searchModal.classList.remove('hidden');
  requestAnimationFrame(function () {
- placeSearchSection.scrollIntoView({ block: 'start' });
  placeSearchInput.focus();
  });
- });
+ }
+ btnSearch.addEventListener('click', openSearchModal);
+ searchClose.addEventListener('click', function () { searchModal.classList.add('hidden'); });
  panelClose.addEventListener('click', function () { panel.classList.add('hidden'); });
 
  apiKeySave.addEventListener('click', async function () {
@@ -3077,6 +3105,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  placeSearchMarker = L.marker([coord.lat, coord.lon]).addTo(map).bindPopup('<strong>' + escapeHtml(placeName(props)) + '</strong>' + (subtext ? '<br><span>' + escapeHtml(subtext) + '</span>' : '')).openPopup();
  map.setView([coord.lat, coord.lon], 14);
  panel.classList.add('hidden');
+ searchModal.classList.add('hidden');
  });
  li.appendChild(btn);
  placeResultsEl.appendChild(li);

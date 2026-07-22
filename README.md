@@ -14,7 +14,7 @@ Tuotanto: https://lith.fi/map/
 - Kalapaikka-indeksi: SYKEn vektorimuotoisesta järvisyvyysdatasta laskettu karttataso, joka korostaa syvänteiden reunat ja tuulen altistamat rannat.
 - Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
 - Järven 3D-syvyysnäkymä, joka ladataan vasta avattaessa.
-- MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille.
+- MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille kartan päällä avautuvasta hakumodaalista.
 - OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat, terassit, veneenlaskupaikat, satamat, vesipisteet sekä kiinnitys- ja ankkuripaikat. Kohteet ladataan appin mukana jaettavasta staattisesta aineistosta (`pois/`), ei ajonaikaisista Overpass-kutsuista. Layer-valitsimessa yksi Karttakohteet-rasti, kategoriat valitaan asetuksista.
 - FMI:n sadetutka karttaoverlaynä.
 - Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
@@ -69,7 +69,7 @@ Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 
 - Reitit, kalapaikat, asetukset ja välimuistiin tallennettu Vesijärvi-data ovat selaimen IndexedDB:ssä.
 - Asetuksia peilataan tarvittaessa localStorageen yhteensopivuuden vuoksi.
-- MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön.
+- MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön. Avain löytyy asetusten lisäosiosta, jotta ajon aikaiset asetukset pysyvät näkyvillä.
 - Näytön hereilläpito käyttää selaimen Screen Wake Lock API:a, jos PWA/selaintila tukee sitä. Jos API puuttuu, Plotteri yrittää iOS-yhteensopivaa NoSleep-varatilaa käyttäjän napautuksen jälkeen. Lukko vapautuu automaattisesti, jos appi ei ole näkyvissä.
 - Sovelluksen asennusnappi käyttää selaimen `beforeinstallprompt`-tapahtumaa, kun se on saatavilla. iOS näyttää käyttäjälle ohjeen käyttää Jakaminen-valikon Lisää Koti-valikkoon -toimintoa.
 - Säähaut lähettävät Open-Meteolle pyöristetyn sijainnin.
