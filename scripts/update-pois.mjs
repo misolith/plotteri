@@ -30,7 +30,7 @@ import { fileURLToPath } from 'url';
 const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'pois');
 const CELL_LAT = 0.5;
 const CELL_LON = 1.0;
-const KINDS = ['firepit', 'shelter', 'fuel', 'terrace'];
+const KINDS = ['firepit', 'shelter', 'fuel', 'terrace', 'slipway', 'marina', 'water', 'mooring'];
 const FILTERS = [
   '[leisure=firepit]',
   '[amenity=bbq]',
@@ -41,7 +41,12 @@ const FILTERS = [
   '[waterway=fuel]',
   '[outdoor_seating=yes]',
   '[amenity=biergarten]',
-  '[leisure=outdoor_seating]'
+  '[leisure=outdoor_seating]',
+  '[leisure=slipway]',
+  '[leisure=marina]',
+  '[amenity=drinking_water]',
+  '[mooring]',
+  '["seamark:type"=anchorage]'
 ];
 const ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
@@ -60,6 +65,11 @@ function poiKind(tags) {
   if (tags.tourism === 'picnic_site') return tags.shelter && tags.shelter !== 'no' ? 'shelter' : null;
   if (tags.tourism === 'wilderness_hut' ||
     (tags.amenity === 'shelter' && (!tags.shelter_type || tags.shelter_type !== 'public_transport'))) return 'shelter';
+  if (tags.leisure === 'slipway') return 'slipway';
+  if (tags.leisure === 'marina') return 'marina';
+  if (tags.amenity === 'drinking_water') return 'water';
+  if (tags['seamark:type'] === 'anchorage' ||
+    (tags.mooring && tags.mooring !== 'no' && tags.mooring !== 'private')) return 'mooring';
   if (tags.amenity === 'fuel' || tags.waterway === 'fuel') return 'fuel';
   if (tags.leisure === 'outdoor_seating' || tags.amenity === 'biergarten' || tags.outdoor_seating === 'yes') return 'terrace';
   return null;
@@ -184,8 +194,10 @@ async function collectFromGeofabrik() {
   const filteredPath = path.join(CACHE_DIR, 'pois-filtered.osm.pbf');
   const exportPath = path.join(CACHE_DIR, 'pois.geojsonseq');
   const tagFilters = [
-    'nwr/leisure=firepit,outdoor_seating', 'nwr/amenity=bbq,shelter,fuel,biergarten',
-    'nwr/tourism=wilderness_hut,picnic_site', 'nwr/waterway=fuel', 'nwr/outdoor_seating=yes'
+    'nwr/leisure=firepit,outdoor_seating,slipway,marina',
+    'nwr/amenity=bbq,shelter,fuel,biergarten,drinking_water',
+    'nwr/tourism=wilderness_hut,picnic_site', 'nwr/waterway=fuel', 'nwr/outdoor_seating=yes',
+    'nwr/mooring', 'nwr/seamark:type=anchorage'
   ];
   console.log('Suodatetaan osmiumilla...');
   execFileSync('osmium', ['tags-filter', pbfPath, ...tagFilters, '-o', filteredPath, '--overwrite'], { stdio: 'inherit' });

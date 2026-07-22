@@ -14,7 +14,7 @@ Tuotanto: https://lith.fi/app/map/
 - Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
 - Järven 3D-syvyysnäkymä, joka ladataan vasta avattaessa.
 - MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille.
-- OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat ja terassit/ulkotarjoilu. Kohteet ladataan appin mukana jaettavasta staattisesta aineistosta (`pois/`), ei ajonaikaisista Overpass-kutsuista.
+- OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat, terassit, veneenlaskupaikat, satamat, vesipisteet sekä kiinnitys- ja ankkuripaikat. Kohteet ladataan appin mukana jaettavasta staattisesta aineistosta (`pois/`), ei ajonaikaisista Overpass-kutsuista. Layer-valitsimessa yksi Karttakohteet-rasti, kategoriat valitaan asetuksista.
 - FMI:n sadetutka karttaoverlaynä.
 - Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
 - Selaimen tile-cache vain oikeasti katsotuille karttatileille, rajatulla tilemäärällä ja säilytysajalla.
