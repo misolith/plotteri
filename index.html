@@ -1228,6 +1228,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  ];
  var poiFailNotified = false;
  var poiLoadedKey = null;
+ var poiInFlightKey = null;
  var poiFetchTimer = null;
  var poiFetchSeq = 0;
  var vesijarviDepthLoaded = false;
@@ -1446,20 +1447,22 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var cacheKey = activeKeys.join(',') + ':' + map.getZoom() + ':' +
  bounds.getSouth().toFixed(2) + ',' + bounds.getWest().toFixed(2) + ',' +
  bounds.getNorth().toFixed(2) + ',' + bounds.getEast().toFixed(2);
- if (cacheKey === poiLoadedKey) return;
- poiLoadedKey = cacheKey;
+ if (cacheKey === poiLoadedKey || cacheKey === poiInFlightKey) return;
  var fetchSeq = ++poiFetchSeq;
+ poiInFlightKey = cacheKey;
  var storeKey = 'poicache:v1:' + cacheKey;
  try {
  var cached = await loadJSON(storeKey, null);
  if (cached && cached.t && Date.now() - cached.t < 24 * 3600 * 1000) {
  if (fetchSeq !== poiFetchSeq) return;
  renderPoiElements(cached.elements);
+ poiLoadedKey = cacheKey;
  return;
  }
  var data = await fetchPoiData(bounds);
  if (fetchSeq !== poiFetchSeq) return;
  renderPoiElements(data.elements);
+ poiLoadedKey = cacheKey;
  saveJSON(storeKey, { t: Date.now(), elements: data.elements || [] }).then(trimPoiCache);
  } catch (e) {
  if (e.name === 'AbortError') return;
@@ -1468,10 +1471,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (fetchSeq !== poiFetchSeq) return;
  if (stale && stale.elements) {
  renderPoiElements(stale.elements);
+ poiLoadedKey = cacheKey;
  } else if (!poiFailNotified) {
  poiFailNotified = true;
  showToast('Karttakohteiden haku (Overpass) ei onnistu juuri nyt');
  }
+ } finally {
+ if (poiInFlightKey === cacheKey) poiInFlightKey = null;
  }
  }
 
