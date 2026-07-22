@@ -538,6 +538,7 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
 import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js';
 
@@ -2529,6 +2530,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  // ---------- screen wake lock ----------
  var wakeLockSentinel = null;
  var wakeLockRequesting = false;
+ var noSleepFallback = null;
 
  function wakeLockSupported() {
  return !!(navigator.wakeLock && navigator.wakeLock.request);
@@ -2538,13 +2540,42 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (wakeLockStatus) wakeLockStatus.textContent = text;
  }
 
+ function wakeLockActive() {
+ return !!wakeLockSentinel || !!(noSleepFallback && noSleepFallback.enabled);
+ }
+
+ async function requestNoSleepFallback() {
+ if (typeof window.NoSleep !== 'function') {
+ setWakeLockStatus('Selain ei tue näytön hereilläpitoa tässä tilassa.');
+ return false;
+ }
+ if (!noSleepFallback) noSleepFallback = new window.NoSleep();
+ if (noSleepFallback.enabled) {
+ setWakeLockStatus('Näyttö pidetään hereillä ajon aikana.');
+ return true;
+ }
+ try {
+ await noSleepFallback.enable();
+ setWakeLockStatus('Näyttö pidetään hereillä ajon aikana.');
+ return true;
+ } catch (e) {
+ console.warn('Wake lock -varatila ei aktivoitunut:', e);
+ setWakeLockStatus('Näytön hereilläpito vaatii napautuksen tai selaimen tuen.');
+ return false;
+ }
+ }
+
  async function releaseWakeLock() {
- if (!wakeLockSentinel) return;
+ if (wakeLockSentinel) {
  var sentinel = wakeLockSentinel;
  wakeLockSentinel = null;
  try {
  await sentinel.release();
  } catch (e) { /* already released */ }
+ }
+ if (noSleepFallback && noSleepFallback.enabled) {
+ noSleepFallback.disable();
+ }
  }
 
  async function requestWakeLock() {
@@ -2554,14 +2585,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return false;
  }
  if (!wakeLockSupported()) {
- setWakeLockStatus('Selain ei tue näytön hereilläpitoa tässä tilassa.');
- return false;
+ return await requestNoSleepFallback();
  }
  if (document.visibilityState !== 'visible') {
  setWakeLockStatus('Näytön hereilläpito aktivoituu, kun appi on näkyvissä.');
  return false;
  }
- if (wakeLockSentinel) {
+ if (wakeLockActive()) {
  setWakeLockStatus('Näyttö pidetään hereillä ajon aikana.');
  return true;
  }
@@ -2600,7 +2630,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  window.addEventListener('pagehide', releaseWakeLock);
  ['pointerdown', 'keydown', 'touchstart'].forEach(function (eventName) {
  document.addEventListener(eventName, function () {
- if (settings.wakeLockEnabled !== false && !wakeLockSentinel) requestWakeLock();
+ if (settings.wakeLockEnabled !== false && !wakeLockActive()) requestWakeLock();
  }, { passive: true });
  });
  requestWakeLock();

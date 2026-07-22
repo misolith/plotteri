@@ -70,7 +70,7 @@ Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 - Reitit, kalapaikat, asetukset ja välimuistiin tallennettu Vesijärvi-data ovat selaimen IndexedDB:ssä.
 - Asetuksia peilataan tarvittaessa localStorageen yhteensopivuuden vuoksi.
 - MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön.
-- Näytön hereilläpito käyttää selaimen Screen Wake Lock API:a, jos PWA/selaintila tukee sitä. Lukko vapautuu automaattisesti, jos appi ei ole näkyvissä.
+- Näytön hereilläpito käyttää selaimen Screen Wake Lock API:a, jos PWA/selaintila tukee sitä. Jos API puuttuu, Plotteri yrittää iOS-yhteensopivaa NoSleep-varatilaa käyttäjän napautuksen jälkeen. Lukko vapautuu automaattisesti, jos appi ei ole näkyvissä.
 - Sovelluksen asennusnappi käyttää selaimen `beforeinstallprompt`-tapahtumaa, kun se on saatavilla. iOS näyttää käyttäjälle ohjeen käyttää Jakaminen-valikon Lisää Koti-valikkoon -toimintoa.
 - Säähaut lähettävät Open-Meteolle pyöristetyn sijainnin.
 - Tile-cache tallentaa vain ne karttatiilet, joita käyttäjä on oikeasti katsonut.
