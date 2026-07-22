@@ -84,6 +84,7 @@ function isTileRequest(request) {
   if (!TILE_HOSTS.has(url.hostname)) return false;
   if (url.searchParams.get('api-key') === 'YOUR_API_KEY') return false;
   if (url.hostname === 'paikkatiedot.ymparisto.fi' && !url.pathname.includes('/wms')) return false;
+  if (url.hostname === 'julkinen.traficom.fi' && !url.pathname.includes('/rasteripalvelu')) return false;
   return true;
 }
 

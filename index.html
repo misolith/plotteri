@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems; worker-src 'self';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; img-src 'self' data: blob: https:; connect-src 'self' https://api.open-meteo.com https://avoin-karttakuva.maanmittauslaitos.fi https://avoin-paikkatieto.maanmittauslaitos.fi https://biwatech.com https://julkinen.traficom.fi https://openwms.fmi.fi https://overpass-api.de https://lz4.overpass-api.de https://paikkatiedot.ymparisto.fi https://z.overpass-api.de https://overpass.kumi.systems https://overpass.private.coffee; worker-src 'self';">
 <meta name="theme-color" content="#05141c">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Plotteri">
@@ -12,7 +12,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
 <style>
  * { box-sizing: border-box; }
  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #05141c; }
@@ -38,11 +38,18 @@
  background: rgba(5,20,28,0.78); border: 1px solid rgba(35,74,95,0.72);
  border-radius: 8px; padding: 8px 9px; min-height: 46px; box-shadow: 0 2px 10px rgba(0,0,0,0.28);
  }
- #hud .hud-block:nth-of-type(4) {
- grid-column: 1 / -1; width: fit-content; max-width: 100%; min-height: 0;
- background: rgba(5,20,28,0.24); border: 1px solid rgba(35,74,95,0.22); box-shadow: none;
- padding: 3px 7px; opacity: 0.82;
+ #hud-row2 {
+ grid-column: 1 / -1; display: flex; align-items: center; gap: 8px;
+ min-width: 0; pointer-events: none;
  }
+ .hud-pill {
+ display: flex; align-items: center; gap: 6px; pointer-events: auto; min-width: 0;
+ background: rgba(5,20,28,0.62); border: 1px solid rgba(35,74,95,0.55);
+ border-radius: 16px; padding: 4px 11px; font-size: 12px; font-weight: 700; color: #9fc0ca;
+ text-shadow: 0 1px 3px rgba(0,0,0,0.85);
+ }
+ #hud-coords-pill { flex: 0 1 auto; overflow: hidden; }
+ #hud-coords { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
  .hud-label {
  display: none;
  }
@@ -133,6 +140,10 @@
  }
  .settings-row:last-child { border-bottom: 0; }
  .settings-row label { font-size: 14px; color: #d8e6ea; }
+ .settings-row select {
+ background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 8px; font-size: 14px;
+ }
  .settings-row input[type="number"] {
  width: 92px; background: #0b232f; border: 1px solid #234a5f; color: #d8e6ea;
  border-radius: 8px; padding: 8px; font-size: 14px;
@@ -221,6 +232,35 @@
  }
  .leaflet-bottom.leaflet-right { bottom: calc(82px + env(safe-area-inset-bottom)); }
 
+ #day-chip { flex: 0 0 auto; white-space: nowrap; }
+ #day-chip.good { color: #7ddf64; border-color: rgba(125,223,100,0.45); }
+ #day-chip.mid { color: #e8a13c; border-color: rgba(232,161,60,0.45); }
+ #day-chip.poor { color: #ff8a72; border-color: rgba(209,80,58,0.45); }
+
+ .day-list { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+ .day-list li {
+ display: flex; justify-content: space-between; gap: 10px;
+ padding: 7px 0; border-bottom: 1px solid #163244;
+ }
+ .day-list li:last-child { border-bottom: 0; }
+ .day-list .day-val { color: #9fc0ca; white-space: nowrap; }
+ .day-list .day-val.pos { color: #7ddf64; }
+ .day-list .day-val.neg { color: #ff8a72; }
+
+ #toast {
+ position: fixed; left: 50%; transform: translateX(-50%);
+ bottom: calc(96px + env(safe-area-inset-bottom)); z-index: 900;
+ background: rgba(11,35,47,0.94); border: 1px solid #234a5f; color: #d8e6ea;
+ border-radius: 8px; padding: 8px 14px; font-size: 13px; max-width: 82vw; text-align: center;
+ transition: opacity 0.3s; opacity: 0; pointer-events: none;
+ }
+ #toast.show { opacity: 1; }
+
+ .ctrl-3d {
+ background: #0b232f !important; color: #d8e6ea !important;
+ font-size: 12px; font-weight: 700;
+ }
+
  @media (prefers-reduced-motion: reduce) {
  #rec-indicator .dot { animation: none; }
  }
@@ -248,14 +288,18 @@
  <div class="hud-label">Nopeus</div>
  <div id="hud-speed" class="hud-speed-value mono">-- km/h</div>
  </div>
- <div class="hud-block">
- <div class="hud-label">Sijainti</div>
- <div id="hud-coords" class="hud-sub-value mono">haetaan sijaintia</div>
+ <div id="hud-row2">
+ <button id="day-chip" class="mono hud-pill" title="Olosuhteet tänään">🎣 --</button>
+ <div id="hud-coords-pill" class="hud-pill" title="Sijainti">
+ <span id="hud-coords" class="mono">haetaan sijaintia</span>
+ </div>
  </div>
  <div id="rec-indicator" class="hidden">
  <span class="dot"></span><span id="rec-time" class="mono">00:00</span>
  </div>
 </div>
+
+<div id="toast" role="status"></div>
 
 <div id="controls">
  <div class="ctrl-wrap">
@@ -322,6 +366,30 @@
  </section>
 
  <section>
+ <h3>Kalapaikka-analyysi</h3>
+ <label class="settings-row">
+ <span>🎯 Kalapaikka-indeksi kartalle</span>
+ <input id="index-toggle" type="checkbox">
+ </label>
+ <div class="settings-row">
+ <label for="species-select">Kohdelaji</label>
+ <select id="species-select">
+ <option value="hauki">Hauki</option>
+ <option value="kuha">Kuha</option>
+ <option value="ahven">Ahven</option>
+ <option value="muikku">Muikku</option>
+ <option value="silakka">Silakka</option>
+ </select>
+ </div>
+ <div class="cache-actions">
+ <button id="btn-3d">3D-syvyysnäkymä</button>
+ <button id="depth-cache-clear">Tyhjennä syvyyscache</button>
+ </div>
+ <p id="depth-status" class="hint">Lähennä järvelle (zoom 12+), niin indeksi lasketaan.</p>
+ <p class="hint">Indeksi lasketaan SYKEn järvisyvyysdatasta ja Traficomin merisyvyysdatasta: syvänteiden reunat, tuulen altistamat rannat ja syvyysvyöhyke. Traficomin aineisto kattaa avoimena merialueen talousvyöhykkeen sekä Vuoksen ja Kymijoen vesistöt. Olosuhdemerkki (🎣) huomioi ilmanpaineen trendin ja kuunkierron. Traficom: Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.</p>
+ </section>
+
+ <section>
  <h3>Karttavälimuisti</h3>
  <div class="settings-grid">
  <label class="settings-row">
@@ -384,6 +452,19 @@
  </section>
 </div>
 
+<div id="day-modal" class="modal-overlay hidden">
+ <div class="modal">
+ <h3>Olosuhteet tänään</h3>
+ <div id="day-summary" class="mono" style="font-size:22px;font-weight:700;margin-bottom:12px;"></div>
+ <ul id="day-parts" class="day-list"></ul>
+ <label style="margin-top:14px;">Parhaat ajat</label>
+ <ul id="day-times" class="day-list mono"></ul>
+ <div class="modal-actions">
+ <button id="day-close">Sulje</button>
+ </div>
+ </div>
+</div>
+
 <div id="marker-modal" class="modal-overlay hidden">
  <div class="modal">
  <h3>Merkitse kalapaikka</h3>
@@ -400,8 +481,11 @@
  </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script type="module">
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js';
+
 (async function () {
  'use strict';
 
@@ -526,6 +610,15 @@
  return 2 * R * Math.asin(Math.sqrt(a));
  }
 
+ function bearingDeg(lat1, lon1, lat2, lon2) {
+ function toRad(d) { return (d * Math.PI) / 180; }
+ var dLon = toRad(lon2 - lon1);
+ var y = Math.sin(dLon) * Math.cos(toRad(lat2));
+ var x = Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+ Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon);
+ return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+ }
+
  function formatSpeed(speedKmh) {
  return speedKmh != null && isFinite(speedKmh) ? speedKmh.toFixed(1) + ' km/h' : '-- km/h';
  }
@@ -641,6 +734,18 @@
  var wpSpeed = document.getElementById('wp-speed');
  var wpCancel = document.getElementById('wp-cancel');
  var wpSave = document.getElementById('wp-save');
+ var dayChip = document.getElementById('day-chip');
+ var dayModal = document.getElementById('day-modal');
+ var daySummary = document.getElementById('day-summary');
+ var dayParts = document.getElementById('day-parts');
+ var dayTimes = document.getElementById('day-times');
+ var dayClose = document.getElementById('day-close');
+ var indexToggle = document.getElementById('index-toggle');
+ var speciesSelect = document.getElementById('species-select');
+ var btn3d = document.getElementById('btn-3d');
+ var depthCacheClear = document.getElementById('depth-cache-clear');
+ var depthStatus = document.getElementById('depth-status');
+ var toastEl = document.getElementById('toast');
 
  // ---------- state ----------
  var defaultPoiVisibility = { firepit: true, shelter: true, fuel: true, terrace: true };
@@ -962,10 +1067,20 @@
  apiKey: '',
  poiVisibility: defaultPoiVisibility,
  radarVisible: true,
+ indexVisible: false,
+ baseLayer: null,
+ sykeVisible: true,
+ vesijarviVisible: false,
+ exaggeration3d: 8,
  tileCache: defaultTileCache
  });
  settings.poiVisibility = Object.assign({}, defaultPoiVisibility, settings.poiVisibility || {});
  if (settings.radarVisible == null) settings.radarVisible = true;
+ if (settings.indexVisible == null) settings.indexVisible = false;
+ if (settings.sykeVisible == null) settings.sykeVisible = true;
+ if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
+ if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
+ if (!(settings.exaggeration3d >= 1 && settings.exaggeration3d <= 10)) settings.exaggeration3d = 8;
  settings.tileCache = Object.assign({}, defaultTileCache, settings.tileCache || {});
  var tracks = await loadJSON('tracks', []);
  var waypoints = await loadJSON('waypoints', []);
@@ -1016,13 +1131,14 @@
  attribution: 'OpenStreetMap'
  });
 
+ var TRAFICOM_ATTRIBUTION = 'Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.';
  var traficomChartLayer = L.tileLayer(
  'https://julkinen.traficom.fi/rasteripalvelu/wmts?request=GetTile&version=1.0.0&service=WMTS&layer=Traficom:Merikarttasarjat%20public&style=default&tilematrixset=WGS84_Pseudo-Mercator&TileMatrix=WGS84_Pseudo-Mercator:{z}&TileRow={y}&TileCol={x}&format=image/png',
  {
  maxZoom: 18,
  maxNativeZoom: 15,
  tileSize: 256,
- attribution: 'Traficom. Ei navigointikäyttöön.',
+ attribution: TRAFICOM_ATTRIBUTION,
  errorTileUrl: TRANSPARENT_PX
  }
  );
@@ -1071,6 +1187,14 @@
  }
  });
 
+ var fishIndexLayer = L.layerGroup();
+ fishIndexLayer.on('add', function () {
+ if (map.attributionControl) map.attributionControl.addAttribution(TRAFICOM_ATTRIBUTION);
+ });
+ fishIndexLayer.on('remove', function () {
+ if (map.attributionControl) map.attributionControl.removeAttribution(TRAFICOM_ATTRIBUTION);
+ });
+
  var poiLayers = {
  firepit: L.layerGroup(),
  shelter: L.layerGroup(),
@@ -1099,16 +1223,38 @@
  'https://overpass-api.de/api/interpreter',
  'https://lz4.overpass-api.de/api/interpreter',
  'https://z.overpass-api.de/api/interpreter',
- 'https://overpass.kumi.systems/api/interpreter'
+ 'https://overpass.kumi.systems/api/interpreter',
+ 'https://overpass.private.coffee/api/interpreter'
  ];
+ var poiFailNotified = false;
  var poiLoadedKey = null;
  var poiFetchTimer = null;
  var poiFetchSeq = 0;
  var vesijarviDepthLoaded = false;
 
- (settings.apiKey ? mmlLayer : osmLayer).addTo(map);
- sykeDepthLayer.addTo(map);
+ var baseLayerByName = { mml: mmlLayer, osm: osmLayer, traficom: traficomChartLayer };
+ var initialBase = baseLayerByName[settings.baseLayer] || (settings.apiKey ? mmlLayer : osmLayer);
+ if (initialBase === mmlLayer && !settings.apiKey) initialBase = osmLayer;
+ initialBase.addTo(map);
+ if (settings.sykeVisible !== false) sykeDepthLayer.addTo(map);
+ if (settings.vesijarviVisible) {
+ vesijarviDepthLayer.addTo(map);
+ loadVesijarviDepthLayer();
+ }
  if (settings.radarVisible !== false) rainRadarLayer.addTo(map);
+ if (settings.indexVisible) fishIndexLayer.addTo(map);
+
+ map.on('baselayerchange', function (e) {
+ settings.baseLayer = e.layer === mmlLayer ? 'mml' : e.layer === traficomChartLayer ? 'traficom' : 'osm';
+ saveJSON('settings', settings);
+ });
+ map.on('overlayadd overlayremove', function (e) {
+ var visible = e.type === 'overlayadd';
+ if (e.layer === sykeDepthLayer) settings.sykeVisible = visible;
+ else if (e.layer === vesijarviDepthLayer) settings.vesijarviVisible = visible;
+ else return;
+ saveJSON('settings', settings);
+ });
  Object.keys(poiLayers).forEach(function (key) {
  if (settings.poiVisibility[key] !== false) poiLayers[key].addTo(map);
  });
@@ -1116,6 +1262,7 @@
  L.control.layers(
  { 'MML Maastokartta': mmlLayer, 'OpenStreetMap': osmLayer, 'Traficom merikartta': traficomChartLayer },
  {
+ 'Kalapaikka-indeksi': fishIndexLayer,
  'SYKE syvyydet': sykeDepthLayer,
  'Vesijarvi syvyysalueet': vesijarviDepthLayer,
  'FMI sadetutka': rainRadarLayer,
@@ -1266,9 +1413,11 @@
  var controller = window.AbortController ? new AbortController() : null;
  var timeout = controller ? setTimeout(function () { controller.abort(); }, 8000) : null;
  try {
- var url = poiOverpassEndpoints[i] + '?data=' + encodeURIComponent(query);
- var res = await fetch(url, {
+ var res = await fetch(poiOverpassEndpoints[i], {
+ method: 'POST',
  cache: 'no-store',
+ headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+ body: 'data=' + encodeURIComponent(query),
  signal: controller ? controller.signal : undefined
  });
  if (!res.ok) throw new Error('overpass status ' + res.status);
@@ -1300,11 +1449,35 @@
  if (cacheKey === poiLoadedKey) return;
  poiLoadedKey = cacheKey;
  var fetchSeq = ++poiFetchSeq;
+ var storeKey = 'poicache:v1:' + cacheKey;
  try {
+ var cached = await loadJSON(storeKey, null);
+ if (cached && cached.t && Date.now() - cached.t < 24 * 3600 * 1000) {
+ if (fetchSeq !== poiFetchSeq) return;
+ renderPoiElements(cached.elements);
+ return;
+ }
  var data = await fetchPoiData(bounds);
  if (fetchSeq !== poiFetchSeq) return;
+ renderPoiElements(data.elements);
+ saveJSON(storeKey, { t: Date.now(), elements: data.elements || [] }).then(trimPoiCache);
+ } catch (e) {
+ if (e.name === 'AbortError') return;
+ console.warn('OSM-kohteiden lataus epaonnistui:', e);
+ var stale = await loadJSON(storeKey, null);
+ if (fetchSeq !== poiFetchSeq) return;
+ if (stale && stale.elements) {
+ renderPoiElements(stale.elements);
+ } else if (!poiFailNotified) {
+ poiFailNotified = true;
+ showToast('Karttakohteiden haku (Overpass) ei onnistu juuri nyt');
+ }
+ }
+ }
+
+ function renderPoiElements(elements) {
  Object.keys(poiLayers).forEach(function (key) { poiLayers[key].clearLayers(); });
- (data.elements || []).forEach(function (el) {
+ (elements || []).forEach(function (el) {
  var lat = el.lat || (el.center && el.center.lat);
  var lon = el.lon || (el.center && el.center.lon);
  var kind = poiKind(el.tags);
@@ -1313,9 +1486,6 @@
  .bindPopup(poiPopupHtml(kind, el.tags || {}))
  .addTo(poiLayers[kind]);
  });
- } catch (e) {
- if (e.name !== 'AbortError') console.warn('OSM-kohteiden lataus epaonnistui:', e);
- }
  }
 
  poiToggleInputs.forEach(function (input) {
@@ -1348,6 +1518,752 @@
  syncRadarToggle();
  if (persist) await saveJSON('settings', settings);
  }
+
+ // ---------- toast ----------
+ var toastTimer = null;
+ function showToast(text) {
+ toastEl.textContent = text;
+ toastEl.classList.add('show');
+ clearTimeout(toastTimer);
+ toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
+ }
+
+ // ---------- kalapaikka-analyysi: syvyystiilet SYKE + Traficom WFS:sta ----------
+ var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
+ var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
+ var DEPTH_TILE_M = 6000;
+ var DEPTH_MIN_ZOOM = 12;
+ var DEPTH_TILE_TTL_MS = 30 * 24 * 3600 * 1000;
+ var DEPTH_CACHE_MAX_BYTES = 12 * 1024 * 1024;
+ var DEPTH_CACHE_MAX_ENTRIES = 150;
+ var DEPTH_MAX_TILES_PER_VIEW = 35;
+ var DEPTH_MEM_MAX = 60;
+ var DEPTH_KEY_PREFIX = 'depthtile:v2:';
+ var depthTilesMem = new Map();
+ var depthFetching = new Map();
+ var depthWorkTimer = null;
+ var depthBuildSeq = 0;
+ var lastAnalysis = null;
+ var indexOverlay = null;
+ var lastDepthTrimAt = 0;
+
+ function setDepthStatus(text) {
+ depthStatus.textContent = text;
+ }
+
+ function depthTileKeysForBounds(bounds) {
+ var corners = [
+ wgs84ToTm35(bounds.getSouth(), bounds.getWest()),
+ wgs84ToTm35(bounds.getSouth(), bounds.getEast()),
+ wgs84ToTm35(bounds.getNorth(), bounds.getWest()),
+ wgs84ToTm35(bounds.getNorth(), bounds.getEast())
+ ];
+ var minE = Infinity, minN = Infinity, maxE = -Infinity, maxN = -Infinity;
+ corners.forEach(function (c) {
+ minE = Math.min(minE, c.e); maxE = Math.max(maxE, c.e);
+ minN = Math.min(minN, c.n); maxN = Math.max(maxN, c.n);
+ });
+ var keys = [];
+ for (var tx = Math.floor(minE / DEPTH_TILE_M); tx <= Math.floor(maxE / DEPTH_TILE_M); tx++) {
+ for (var ty = Math.floor(minN / DEPTH_TILE_M); ty <= Math.floor(maxN / DEPTH_TILE_M); ty++) {
+ keys.push(tx + ':' + ty);
+ }
+ }
+ return keys;
+ }
+
+ function putDepthMem(key, tile) {
+ depthTilesMem.delete(key);
+ depthTilesMem.set(key, tile);
+ while (depthTilesMem.size > DEPTH_MEM_MAX) {
+ depthTilesMem.delete(depthTilesMem.keys().next().value);
+ }
+ }
+
+ async function getDepthTile(key) {
+ var mem = depthTilesMem.get(key);
+ if (mem && Date.now() - mem.t < DEPTH_TILE_TTL_MS) return mem;
+ if (depthFetching.has(key)) return depthFetching.get(key);
+ var promise = (async function () {
+ var cached = await loadJSON(DEPTH_KEY_PREFIX + key, null);
+ if (cached && cached.t && Date.now() - cached.t < DEPTH_TILE_TTL_MS) {
+ putDepthMem(key, cached);
+ return cached;
+ }
+ var parts = key.split(':');
+ var tx = parseInt(parts[0], 10), ty = parseInt(parts[1], 10);
+ var bbox = [tx * DEPTH_TILE_M, ty * DEPTH_TILE_M, (tx + 1) * DEPTH_TILE_M, (ty + 1) * DEPTH_TILE_M].join(',') + ',EPSG:3067';
+ var tile = {
+ t: Date.now(),
+ c: [],
+ b: [],
+ s: [],
+ sources: []
+ };
+ var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+ try {
+ var sykeResponses = await Promise.all([
+ fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
+ fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
+ ]);
+ if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
+ tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
+ tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
+ if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
+ } catch (e) {
+ console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
+ }
+ var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+ try {
+ var traficomResponses = await Promise.all([
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L'), { cache: 'no-store' }),
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
+ fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
+ ]);
+ if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
+ throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
+ }
+ var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
+ tile.c = tile.c.concat(parseContours(await traficomResponses[0].json()));
+ tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
+ tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
+ if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
+ } catch (e) {
+ console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
+ }
+ putDepthMem(key, tile);
+ saveJSON(DEPTH_KEY_PREFIX + key, tile).then(trimDepthCache);
+ return tile;
+ })();
+ depthFetching.set(key, promise);
+ try {
+ return await promise;
+ } finally {
+ depthFetching.delete(key);
+ }
+ }
+
+ async function ensureDepthTiles(keys) {
+ var results = new Map();
+ var queue = keys.slice();
+ async function worker() {
+ while (queue.length) {
+ var key = queue.shift();
+ try {
+ results.set(key, await getDepthTile(key));
+ } catch (e) {
+ console.warn('Syvyystiilen haku epäonnistui:', key, e);
+ }
+ }
+ }
+ await Promise.all([worker(), worker(), worker()]);
+ return results;
+ }
+
+ async function listKvEntries(prefix) {
+ var db = await openAppDb();
+ return await new Promise(function (resolve, reject) {
+ var out = [];
+ var tx = db.transaction(APP_STORE, 'readonly');
+ var req = tx.objectStore(APP_STORE).openCursor();
+ req.onsuccess = function () {
+ var cur = req.result;
+ if (!cur) return resolve(out);
+ var rec = cur.value;
+ if (rec && typeof rec.key === 'string' && rec.key.indexOf(prefix) === 0) {
+ out.push({ key: rec.key, updated: rec.updated || 0, size: rec.value ? String(rec.value).length : 0 });
+ }
+ cur.continue();
+ };
+ req.onerror = function () { reject(req.error); };
+ });
+ }
+
+ function listDepthCacheEntries() {
+ return listKvEntries(DEPTH_KEY_PREFIX);
+ }
+
+ var POI_CACHE_MAX_ENTRIES = 60;
+ var lastPoiTrimAt = 0;
+ async function trimPoiCache() {
+ if (Date.now() - lastPoiTrimAt < 60000) return;
+ lastPoiTrimAt = Date.now();
+ try {
+ var entries = await listKvEntries('poicache:v1:');
+ if (entries.length <= POI_CACHE_MAX_ENTRIES) return;
+ entries.sort(function (a, b) { return a.updated - b.updated; });
+ var remove = entries.slice(0, entries.length - POI_CACHE_MAX_ENTRIES);
+ for (var i = 0; i < remove.length; i++) await idbDelete(remove[i].key);
+ } catch (e) { /* trimmaus on best effort */ }
+ }
+
+ async function trimDepthCache() {
+ if (Date.now() - lastDepthTrimAt < 60000) return;
+ lastDepthTrimAt = Date.now();
+ try {
+ var entries = await listDepthCacheEntries();
+ var now = Date.now();
+ var expired = entries.filter(function (e) { return now - e.updated > DEPTH_TILE_TTL_MS; });
+ var live = entries.filter(function (e) { return now - e.updated <= DEPTH_TILE_TTL_MS; });
+ live.sort(function (a, b) { return a.updated - b.updated; });
+ var totalBytes = live.reduce(function (sum, e) { return sum + e.size; }, 0);
+ var remove = expired.slice();
+ while (live.length > DEPTH_CACHE_MAX_ENTRIES || totalBytes > DEPTH_CACHE_MAX_BYTES) {
+ var oldest = live.shift();
+ if (!oldest) break;
+ totalBytes -= oldest.size;
+ remove.push(oldest);
+ }
+ for (var i = 0; i < remove.length; i++) await idbDelete(remove[i].key);
+ } catch (e) { /* trimmaus on best effort */ }
+ }
+
+ async function updateDepthCacheStatus() {
+ if (!analysisWorkerBroken) {
+ try {
+ var res = await workerRequest({ type: 'status' });
+ setDepthStatus('Syvyyscache: ' + res.count + ' tiiltä, ' + (res.bytes / 1048576).toFixed(1) + ' MB (raja ' +
+ res.maxEntries + ' / ' + Math.round(res.maxBytes / 1048576) + ' MB).');
+ return;
+ } catch (e) { /* fallback alle */ }
+ }
+ try {
+ var entries = await listDepthCacheEntries();
+ var bytes = entries.reduce(function (sum, e) { return sum + e.size; }, 0);
+ setDepthStatus('Syvyyscache: ' + entries.length + ' tiiltä, ' + (bytes / 1048576).toFixed(1) + ' MB (raja ' +
+ DEPTH_CACHE_MAX_ENTRIES + ' / ' + Math.round(DEPTH_CACHE_MAX_BYTES / 1048576) + ' MB).');
+ } catch (e) {
+ setDepthStatus('Syvyyscachen tila ei saatavilla.');
+ }
+ }
+
+ async function clearDepthCache() {
+ var ok = false;
+ if (!analysisWorkerBroken) {
+ try {
+ await workerRequest({ type: 'clear' });
+ ok = true;
+ } catch (e) { /* fallback alle */ }
+ }
+ try {
+ var entries = await listDepthCacheEntries();
+ for (var i = 0; i < entries.length; i++) await idbDelete(entries[i].key);
+ depthTilesMem.clear();
+ ok = true;
+ } catch (e) { /* kv-siivous on toissijainen */ }
+ showToast(ok ? 'Syvyyscache tyhjennetty' : 'Tyhjennys epäonnistui');
+ updateDepthCacheStatus();
+ }
+
+ // ---------- analyysin rakennus ja overlay ----------
+ function scheduleDepthWork() {
+ clearTimeout(depthWorkTimer);
+ depthWorkTimer = setTimeout(function () { runDepthWork(false); }, 700);
+ }
+
+ function clearIndexOverlay() {
+ if (indexOverlay) {
+ fishIndexLayer.removeLayer(indexOverlay);
+ indexOverlay = null;
+ }
+ }
+
+ function lerpColor(c1, c2, t) {
+ return [
+ Math.round(c1[0] + (c2[0] - c1[0]) * t),
+ Math.round(c1[1] + (c2[1] - c1[1]) * t),
+ Math.round(c1[2] + (c2[2] - c1[2]) * t)
+ ];
+ }
+
+ function indexColor(s) {
+ var t = Math.max(0, Math.min(1, (s - SCORE_WEIGHTS.minScoreToShow) / (1 - SCORE_WEIGHTS.minScoreToShow)));
+ var lime = [196, 240, 66], amber = [240, 152, 40], red = [222, 56, 40];
+ var rgb = t < 0.5 ? lerpColor(lime, amber, t * 2) : lerpColor(amber, red, (t - 0.5) * 2);
+ return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.35 + 0.45 * t))];
+ }
+
+ function drawIndexOverlay(a) {
+ var canvas = document.createElement('canvas');
+ canvas.width = a.nx;
+ canvas.height = a.ny;
+ var ctx = canvas.getContext('2d');
+ var img = ctx.createImageData(a.nx, a.ny);
+ for (var gy = 0; gy < a.ny; gy++) {
+ for (var gx = 0; gx < a.nx; gx++) {
+ var idx = gy * a.nx + gx;
+ if (!a.mask[idx] || a.score[idx] < SCORE_WEIGHTS.minScoreToShow) continue;
+ var col = indexColor(a.score[idx]);
+ var pix = ((a.ny - 1 - gy) * a.nx + gx) * 4;
+ img.data[pix] = col[0];
+ img.data[pix + 1] = col[1];
+ img.data[pix + 2] = col[2];
+ img.data[pix + 3] = col[3];
+ }
+ }
+ ctx.putImageData(img, 0, 0);
+ var url = canvas.toDataURL();
+ var overlayBounds = L.latLngBounds([[a.south, a.west], [a.north, a.east]]);
+ if (indexOverlay) {
+ indexOverlay.setUrl(url);
+ indexOverlay.setBounds(overlayBounds);
+ } else {
+ indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false });
+ indexOverlay.addTo(fishIndexLayer);
+ }
+ }
+
+ // ---------- analyysilaskenta workerissa, ruudukko ankkuroitu maailmaan ----------
+ var analysisWorker = null;
+ var analysisWorkerBroken = false;
+ var analysisWorkerMsgSeq = 0;
+ var analysisWorkerPending = new Map();
+
+ function ensureAnalysisWorker() {
+ if (analysisWorkerBroken || typeof Worker === 'undefined') return null;
+ if (analysisWorker) return analysisWorker;
+ try {
+ analysisWorker = new Worker('analysis-worker.js', { type: 'module' });
+ analysisWorker.onmessage = function (e) {
+ var msg = e.data || {};
+ var pending = analysisWorkerPending.get(msg.id);
+ if (!pending) return;
+ if (msg.progress) {
+ if (pending.onProgress) pending.onProgress(msg.progress);
+ return;
+ }
+ analysisWorkerPending.delete(msg.id);
+ if (msg.error) pending.reject(new Error(msg.error));
+ else pending.resolve(msg);
+ };
+ analysisWorker.onerror = function () {
+ analysisWorkerBroken = true;
+ analysisWorkerPending.forEach(function (p) { p.reject(new Error('worker error')); });
+ analysisWorkerPending.clear();
+ };
+ return analysisWorker;
+ } catch (e) {
+ analysisWorkerBroken = true;
+ return null;
+ }
+ }
+
+ function workerRequest(payload, onProgress) {
+ var worker = ensureAnalysisWorker();
+ if (!worker) return Promise.reject(new Error('worker unavailable'));
+ return new Promise(function (resolve, reject) {
+ var id = ++analysisWorkerMsgSeq;
+ analysisWorkerPending.set(id, { resolve: resolve, reject: reject, onProgress: onProgress });
+ worker.postMessage(Object.assign({ id: id }, payload));
+ });
+ }
+
+ function analysisCellM() {
+ var z = map.getZoom();
+ return z >= 14 ? 50 : z >= 13 ? 100 : 200;
+ }
+
+ // ---------- lajin ja dynaamisten tekijoiden parametrit ----------
+ function lightShiftMeters(now, lat, lon) {
+ if (!window.SunCalc) return 0;
+ var altDeg = SunCalc.getPosition(now, lat, lon).altitude * 180 / Math.PI;
+ var bright = Math.max(0, Math.min(1, (altDeg + 6) / 26));
+ return (1 - bright) * 2.5; // max siirtyma metreina pimeaan (esim. kuhan yonousu)
+ }
+
+ function currentSpeciesKey() {
+ return SPECIES_TRAITS[settings.species] ? settings.species : 'hauki';
+ }
+
+ function speciesBuildParams(centerLat, centerLon) {
+ var now = new Date();
+ var key = currentSpeciesKey();
+ return {
+ speciesKey: key,
+ traits: SPECIES_TRAITS[key],
+ thermoDepthM: estimateThermoclineDepth(now, centerLat),
+ lightShiftM: lightShiftMeters(now, centerLat, centerLon),
+ strat: stratificationFactor(now)
+ };
+ }
+
+ function analysisParamsKey() {
+ var center = map.getCenter();
+ var p = speciesBuildParams(center.lat, center.lng);
+ return windAnalysisKey() + '|' + p.speciesKey + '|' + Math.round(p.lightShiftM * 4) + '|' + Math.round(p.strat * 20);
+ }
+
+ var ANALYSIS_ANCHOR_LAT = 62;
+ function snapAnalysisBounds(bounds, cellM) {
+ var cellLat = cellM / 111320;
+ var cellLon = cellM / (111320 * Math.cos(ANALYSIS_ANCHOR_LAT * Math.PI / 180));
+ return {
+ west: Math.floor(bounds.getWest() / cellLon) * cellLon,
+ east: Math.ceil(bounds.getEast() / cellLon) * cellLon,
+ south: Math.floor(bounds.getSouth() / cellLat) * cellLat,
+ north: Math.ceil(bounds.getNorth() / cellLat) * cellLat,
+ cellLon: cellLon,
+ cellLat: cellLat,
+ cellM: cellM
+ };
+ }
+
+ async function buildAnalysisForBounds(bounds, cellM) {
+ var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
+ var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
+ if (!analysisWorkerBroken) {
+ try {
+ var res = await workerRequest(Object.assign({
+ type: 'build',
+ west: snap.west, south: snap.south, east: snap.east, north: snap.north,
+ cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
+ wind: effectiveAnalysisWind(), windKey: windAnalysisKey()
+ }, sp), function (p) {
+ if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
+ });
+ if (res.reason === 'toowide') return null;
+ if (res.result) {
+ res.result.reqCellM = snap.cellM;
+ res.result.sources = res.sources || [];
+ }
+ return res.result;
+ } catch (e) {
+ console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
+ }
+ }
+ // fallback: koko putki karttasaikeessa jos worker ei kaynnisty
+ var snapBounds = L.latLngBounds([snap.south, snap.west], [snap.north, snap.east]);
+ var keys = depthTileKeysForBounds(snapBounds);
+ if (keys.length > DEPTH_MAX_TILES_PER_VIEW) return null;
+ var tiles = await ensureDepthTiles(keys);
+ var contourById = new Map();
+ var bandById = new Map();
+ var soundingById = new Map();
+ tiles.forEach(function (tile) {
+ (tile.c || []).forEach(function (c) { contourById.set(c.id, c); });
+ (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
+ (tile.s || []).forEach(function (s) { soundingById.set(s.id, s); });
+ });
+ var a = buildAnalysis({
+ contours: Array.from(contourById.values()),
+ bands: Array.from(bandById.values()),
+ soundings: Array.from(soundingById.values()),
+ wind: effectiveAnalysisWind(),
+ traits: sp.traits,
+ thermoDepthM: sp.thermoDepthM,
+ lightShiftM: sp.lightShiftM,
+ strat: sp.strat,
+ west: snap.west,
+ south: snap.south,
+ east: snap.east,
+ north: snap.north,
+ cellLonDeg: snap.cellLon,
+ cellLatDeg: snap.cellLat
+ });
+ if (a) {
+ a.reqCellM = snap.cellM;
+ a.sources = [];
+ }
+ return a;
+ }
+
+ // 6 h vektorikeskituuli: kaantyileva tuuli kumoutuu keskiarvossa, mika vastaa
+ // sita etta syottikalan kasautuminen vaatii pysyvaa suuntaa
+ var sustainedWind = null;
+ function updateSustainedWind(timesMs, speeds, dirs) {
+ if (!timesMs.length || !speeds.length) return;
+ var nowMs = Date.now();
+ var best = -1, bestDiff = Infinity;
+ for (var i = 0; i < timesMs.length; i++) {
+ var diff = Math.abs(timesMs[i] - nowMs);
+ if (diff < bestDiff) { bestDiff = diff; best = i; }
+ }
+ if (best < 0) return;
+ var ux = 0, vy = 0, n = 0;
+ for (var j = Math.max(0, best - 5); j <= best; j++) {
+ var sp = Number(speeds[j]), dr = Number(dirs[j]);
+ if (!isFinite(sp) || !isFinite(dr)) continue;
+ var rad = dr * Math.PI / 180;
+ ux += sp * Math.sin(rad);
+ vy += sp * Math.cos(rad);
+ n++;
+ }
+ if (!n) return;
+ sustainedWind = {
+ speed: Math.sqrt(ux * ux + vy * vy) / n,
+ direction: (Math.atan2(ux, vy) * 180 / Math.PI + 360) % 360,
+ t: Date.now()
+ };
+ onWindUpdated();
+ }
+
+ function effectiveAnalysisWind() {
+ if (sustainedWind && Date.now() - sustainedWind.t < 2 * 3600000) {
+ return { speed: sustainedWind.speed, direction: sustainedWind.direction };
+ }
+ return currentWind;
+ }
+
+ function windAnalysisKey() {
+ var w = effectiveAnalysisWind();
+ return w ? Math.round(w.direction / 15) + ':' + Math.round(w.speed) : 'none';
+ }
+ var lastAnalysisParamsKey = null;
+ var traficomAttribOn = false;
+
+ function setTraficomAttribution(on) {
+ if (on === traficomAttribOn) return;
+ traficomAttribOn = on;
+ if (on) map.attributionControl.addAttribution(TRAFICOM_ATTRIBUTION);
+ else map.attributionControl.removeAttribution(TRAFICOM_ATTRIBUTION);
+ }
+
+ function analysisCoversView() {
+ if (!lastAnalysis) return false;
+ var vb = map.getBounds();
+ var marginLon = (lastAnalysis.east - lastAnalysis.west) * 0.05;
+ var marginLat = (lastAnalysis.north - lastAnalysis.south) * 0.05;
+ return vb.getWest() >= lastAnalysis.west + marginLon &&
+ vb.getEast() <= lastAnalysis.east - marginLon &&
+ vb.getSouth() >= lastAnalysis.south + marginLat &&
+ vb.getNorth() <= lastAnalysis.north - marginLat;
+ }
+
+ async function runDepthWork(force) {
+ clearTimeout(depthWorkTimer);
+ if (!map.hasLayer(fishIndexLayer) && !force) return null;
+ if (map.getZoom() < DEPTH_MIN_ZOOM) {
+ clearIndexOverlay();
+ setDepthStatus('Lähennä järvelle (zoom 12+), niin indeksi lasketaan.');
+ return null;
+ }
+ if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
+ lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
+ return lastAnalysis.hasData ? lastAnalysis : null;
+ }
+ var bounds = map.getBounds().pad(0.2);
+ var keys = depthTileKeysForBounds(bounds);
+ if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
+ setDepthStatus('Näkymä liian laaja syvyysanalyysiin, lähennä lisää.');
+ return null;
+ }
+ var seq = ++depthBuildSeq;
+ setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)…');
+ var a = await buildAnalysisForBounds(bounds);
+ if (seq !== depthBuildSeq) return null;
+ lastAnalysis = a;
+ lastAnalysisParamsKey = analysisParamsKey();
+ if (!a || !a.hasData) {
+ clearIndexOverlay();
+ setTraficomAttribution(false);
+ setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE järville, Traficom merelle sekä Vuoksen ja Kymijoen vesistöihin).');
+ if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
+ return null;
+ }
+ var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
+ setTraficomAttribution(usesTraficom);
+ setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
+ (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
+ ', ruudukko ' + a.nx + '×' + a.ny +
+ (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
+ (usesTraficom ? ' ' + TRAFICOM_ATTRIBUTION : ''));
+ drawIndexOverlay(a);
+ return a;
+ }
+
+ function onWindUpdated() {
+ if (map.hasLayer(fishIndexLayer) && lastAnalysis) scheduleDepthWork();
+ }
+
+ async function setFishIndexVisible(visible, persist) {
+ settings.indexVisible = !!visible;
+ if (visible && !map.hasLayer(fishIndexLayer)) fishIndexLayer.addTo(map);
+ if (!visible && map.hasLayer(fishIndexLayer)) map.removeLayer(fishIndexLayer);
+ indexToggle.checked = !!visible;
+ if (persist) await saveJSON('settings', settings);
+ if (visible) scheduleDepthWork();
+ }
+
+ // ---------- 3D-nakyma (lazy) ----------
+ var view3dLoading = false;
+ var view3dHandle = null;
+ var boatHeading = null;
+ var rebuild3dInFlight = false;
+
+ async function rebuild3dAround(lat, lon) {
+ if (rebuild3dInFlight || !view3dHandle || !lastAnalysis) return;
+ rebuild3dInFlight = true;
+ try {
+ var dLat = lastAnalysis.north - lastAnalysis.south;
+ var dLon = lastAnalysis.east - lastAnalysis.west;
+ var bounds = L.latLngBounds(
+ [lat - dLat / 2, lon - dLon / 2],
+ [lat + dLat / 2, lon + dLon / 2]
+ );
+ var a = await buildAnalysisForBounds(bounds, lastAnalysis.reqCellM);
+ if (a && a.hasData && view3dHandle) {
+ lastAnalysis = a;
+ view3dHandle.setAnalysis(a);
+ }
+ } catch (e) {
+ console.warn('3D-alueen uudelleenrakennus epäonnistui:', e);
+ } finally {
+ rebuild3dInFlight = false;
+ }
+ }
+
+ async function open3d() {
+ if (view3dLoading || view3dHandle) return;
+ if (map.getZoom() < DEPTH_MIN_ZOOM) {
+ showToast('Lähennä järvelle (zoom 12+) ennen 3D-näkymää');
+ return;
+ }
+ view3dLoading = true;
+ showToast('Valmistellaan 3D-näkymää…');
+ try {
+ var a = (await runDepthWork(true)) || lastAnalysis;
+ if (!a || !a.hasData) {
+ showToast('Ei syvyysdataa tässä näkymässä');
+ return;
+ }
+ var mod = await import('./view3d.js');
+ panel.classList.add('hidden');
+ view3dHandle = await mod.openBathy3d(a, {
+ title: '3D-syvyysnäkymä',
+ exaggeration: settings.exaggeration3d,
+ onExaggeration: function (value) {
+ settings.exaggeration3d = value;
+ saveJSON('settings', settings);
+ },
+ onClose: function () { view3dHandle = null; },
+ onNearEdge: rebuild3dAround
+ });
+ if (currentPos) view3dHandle.updateBoat(currentPos.lat, currentPos.lon, boatHeading);
+ } catch (e) {
+ console.error('3D-näkymän avaus epäonnistui:', e);
+ showToast('3D-näkymän lataus epäonnistui');
+ } finally {
+ view3dLoading = false;
+ }
+ }
+
+ var View3dControl = L.Control.extend({
+ onAdd: function () {
+ var div = L.DomUtil.create('div', 'leaflet-bar');
+ var link = L.DomUtil.create('a', 'ctrl-3d', div);
+ link.href = '#';
+ link.textContent = '3D';
+ link.title = '3D-syvyysnäkymä';
+ L.DomEvent.on(link, 'click', function (e) {
+ L.DomEvent.preventDefault(e);
+ open3d();
+ });
+ return div;
+ }
+ });
+ new View3dControl({ position: 'bottomright' }).addTo(map);
+
+ // ---------- olosuhteet tanaan ----------
+ var lastDayFetch = null;
+ var lastDayScore = null;
+
+ async function fetchDayConditions(lat, lon, force) {
+ if (!isFinite(lat) || !isFinite(lon)) return;
+ if (!force && lastDayFetch && Date.now() - lastDayFetch.t < 30 * 60000 && haversine(lastDayFetch.lat, lastDayFetch.lon, lat, lon) < 25000) return;
+ lastDayFetch = { lat: lat, lon: lon, t: Date.now() };
+ try {
+ var url = 'https://api.open-meteo.com/v1/forecast?latitude=' + encodeURIComponent(lat.toFixed(2)) +
+ '&longitude=' + encodeURIComponent(lon.toFixed(2)) +
+ '&hourly=pressure_msl,wind_speed_10m,wind_direction_10m&wind_speed_unit=ms&past_days=1&forecast_days=1&timeformat=unixtime';
+ var res = await fetch(url, { cache: 'no-store' });
+ if (!res.ok) throw new Error('conditions status ' + res.status);
+ var data = await res.json();
+ var times = (data.hourly && data.hourly.time || []).map(function (t) { return t * 1000; });
+ var press = data.hourly && data.hourly.pressure_msl || [];
+ var trend = pressureTrend(times, press, new Date());
+ lastDayScore = dayScore({ trend: trend, SunCalc: window.SunCalc, now: new Date(), lat: lat, lon: lon });
+ updateDayChipUI();
+ updateSustainedWind(times, data.hourly && data.hourly.wind_speed_10m || [], data.hourly && data.hourly.wind_direction_10m || []);
+ } catch (e) {
+ console.warn('Olosuhdehaku epäonnistui:', e);
+ }
+ }
+
+ function updateDayChipUI() {
+ if (!lastDayScore) {
+ dayChip.textContent = '🎣 --';
+ return;
+ }
+ dayChip.textContent = '🎣 ' + lastDayScore.score + ' ' + lastDayScore.label;
+ dayChip.classList.remove('good', 'mid', 'poor');
+ dayChip.classList.add(lastDayScore.score >= 55 ? 'good' : lastDayScore.score >= 45 ? 'mid' : 'poor');
+ }
+
+ function fmtClock(d) {
+ return d.toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit' });
+ }
+
+ function renderDayModal() {
+ dayParts.innerHTML = '';
+ dayTimes.innerHTML = '';
+ if (!lastDayScore) {
+ daySummary.textContent = 'Ei dataa vielä';
+ return;
+ }
+ daySummary.textContent = '🎣 ' + lastDayScore.score + ' / 100 — ' + lastDayScore.label;
+ lastDayScore.parts.forEach(function (part) {
+ var li = document.createElement('li');
+ var name = document.createElement('span');
+ name.textContent = part.name + ': ' + part.text;
+ var val = document.createElement('span');
+ val.className = 'day-val' + (part.value > 0 ? ' pos' : part.value < 0 ? ' neg' : '');
+ val.textContent = (part.value >= 0 ? '+' : '') + part.value;
+ li.appendChild(name);
+ li.appendChild(val);
+ dayParts.appendChild(li);
+ });
+ lastDayScore.bestTimes.forEach(function (bt) {
+ var li = document.createElement('li');
+ var name = document.createElement('span');
+ name.textContent = bt.label;
+ var val = document.createElement('span');
+ val.className = 'day-val';
+ val.textContent = fmtClock(bt.from) + '–' + fmtClock(bt.to);
+ li.appendChild(name);
+ li.appendChild(val);
+ dayTimes.appendChild(li);
+ });
+ }
+
+ dayChip.addEventListener('click', function () {
+ renderDayModal();
+ dayModal.classList.remove('hidden');
+ });
+ dayClose.addEventListener('click', function () { dayModal.classList.add('hidden'); });
+
+ indexToggle.addEventListener('change', function () {
+ setFishIndexVisible(indexToggle.checked, true);
+ });
+ speciesSelect.addEventListener('change', async function () {
+ settings.species = SPECIES_TRAITS[speciesSelect.value] ? speciesSelect.value : 'hauki';
+ await saveJSON('settings', settings);
+ if (map.hasLayer(fishIndexLayer) || view3dHandle) runDepthWork(true);
+ });
+ btn3d.addEventListener('click', open3d);
+ depthCacheClear.addEventListener('click', clearDepthCache);
+
+ map.on('moveend zoomend', scheduleDepthWork);
+ map.on('overlayadd overlayremove', function (e) {
+ if (e.layer !== fishIndexLayer) return;
+ settings.indexVisible = e.type === 'overlayadd';
+ indexToggle.checked = settings.indexVisible;
+ saveJSON('settings', settings);
+ if (settings.indexVisible) scheduleDepthWork();
+ });
+
+ setInterval(function () {
+ if (lastDayFetch) fetchDayConditions(lastDayFetch.lat, lastDayFetch.lon, true);
+ }, 30 * 60000);
 
  // ---------- position tracking ----------
  var posMarker = null;
@@ -1436,6 +2352,8 @@
  weatherSourceLabel = sourceLabel || 'Kartta';
  lastWeatherFetch = { lat: queryLat, lon: queryLon, t: Date.now(), source: weatherSourceLabel };
  updateHud();
+ onWindUpdated();
+ fetchDayConditions(queryLat, queryLon);
  }
  } catch (e) {
  console.error('Säätiedon haku epäonnistui:', e);
@@ -1452,6 +2370,13 @@
  var previousPos = currentPos;
  currentSpeedKmh = gpsSpeedKmh(pos, previousPos, now);
  currentPos = { lat: latitude, lon: longitude, accuracy: accuracy, t: now };
+ var gpsHeading = Number(pos.coords.heading);
+ if (!isNaN(gpsHeading) && currentSpeedKmh != null && currentSpeedKmh > 1) {
+ boatHeading = gpsHeading;
+ } else if (previousPos && haversine(previousPos.lat, previousPos.lon, latitude, longitude) > 3) {
+ boatHeading = bearingDeg(previousPos.lat, previousPos.lon, latitude, longitude);
+ }
+ if (view3dHandle) view3dHandle.updateBoat(latitude, longitude, boatHeading);
  updateHud();
  if (weatherMode === 'gps') fetchWeather(latitude, longitude, 'GPS');
 
@@ -1661,6 +2586,9 @@
  // ---------- settings/data panel ----------
  btnPanel.addEventListener('click', function () {
  apiKeyInput.value = settings.apiKey || '';
+ indexToggle.checked = !!settings.indexVisible;
+ speciesSelect.value = currentSpeciesKey();
+ updateDepthCacheStatus();
  panel.classList.remove('hidden');
  });
  btnSearch.addEventListener('click', function () {
@@ -2024,6 +2952,26 @@
  }
 
  updateHud();
+ indexToggle.checked = !!settings.indexVisible;
+ speciesSelect.value = currentSpeciesKey();
+ if (settings.indexVisible) scheduleDepthWork();
+ window.__plotteri = {
+ map: map,
+ fishIndexLayer: fishIndexLayer,
+ runDepthWork: runDepthWork,
+ fetchDayConditions: fetchDayConditions,
+ open3d: open3d,
+ getAnalysis: function () { return lastAnalysis; },
+ getDayScore: function () { return lastDayScore; },
+ get3d: function () { return view3dHandle; },
+ getBuildSeq: function () { return depthBuildSeq; }
+ };
+ setTimeout(function () {
+ if (!lastDayScore) {
+ var center = map.getCenter();
+ fetchDayConditions(center.lat, center.lng, true);
+ }
+ }, 4000);
 })();
 </script>
 </body>

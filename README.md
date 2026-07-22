@@ -10,12 +10,27 @@ Tuotanto: https://lith.fi/app/map/
 - GPS-seuranta nopeudella, suunnalla, tarkkuudella, wake lockilla ja reitin tallennuksella.
 - Tallennetut reitit ja kalapaikat, ensisijaisesti IndexedDB:ssä localStorage-migraatiolla ja varmistuksella.
 - Nopeuden mukaan värittyvä reittiviiva, jotta hidas uistelu erottuu nopeammasta ajosta.
+- Kalapaikka-indeksi: SYKEn vektorimuotoisesta järvisyvyysdatasta laskettu karttataso, joka korostaa syvänteiden reunat ja tuulen altistamat rannat.
+- Olosuhteet tänään -merkki: ilmanpaineen trendistä ja kuunkierrosta laskettu päiväkerroin parhaine aikoineen.
+- Järven 3D-syvyysnäkymä, joka ladataan vasta avattaessa.
 - MML:n paikannimihaku suomalaisille saarille, lahdille, niemille, selille, kunnille ja muille nimetyille kohteille.
 - OSM-pohjaiset karttakohteet: nuotiopaikat, laavut, bensa-asemat ja terassit/ulkotarjoilu.
 - FMI:n sadetutka karttaoverlaynä.
 - Vesijärven syvyysalueet, jotka ladataan vasta tarvittaessa ja tallennetaan ensimmäisen latauksen jälkeen IndexedDB:hen.
 - Selaimen tile-cache vain oikeasti katsotuille karttatileille, rajatulla tilemäärällä ja säilytysajalla.
 - PWA-manifesti ja ikoni kotinäyttöasennusta varten.
+
+## Kalapaikka-analyysi
+
+- Syvyysdata haetaan vektorina kahdesta WFS-lähteestä: SYKEn `inspire_el` (järvien syvyyskäyrät ja -vyöhykkeet) ja Traficomin `inspirepalvelu/rajoitettu` (merialueen syvyyskäyrät, -alueet ja luotaukset; vapaa kattavuus talousvyöhyke + Vuoksen ja Kymijoen vesistöt). Molemmat: bbox EPSG:3067, ulostulo EPSG:4326.
+- Kalapaikka-indeksi (karttataso): syvänteen reunat (gradientti IDW-syvyysruudukosta), tuulen altistamat rannat (0-käyrän normaali vs. tuulen suunta; merellä rantaviiva syntetisoidaan DRVAL1=0-syvyysalueiden reunoista) ja lajikohtainen syvyyspainotus. Painot ovat `analysis.js`:n `SCORE_WEIGHTS`- ja `SPECIES_TRAITS`-objekteissa.
+- Tuulisignaali: 6 h vektorikeskituuli (Open-Meteo; kääntyilevä tuuli kumoutuu keskiarvossa), voimakkuusvaste 2→5 m/s nousu, 5–8 m/s taso ja 8–14 m/s lasku (sekoittuminen), vaikutuskaista ~250 m rannasta, ja pyyhkäisymatka (fetch): täysi vaikutus vaatii ~2 km avovettä tuulen puolella.
+- Kohdelaji valitaan asetuksista: pohjasuhteiset (hauki, kuha, ahven) käyttävät lajikohtaista syvyyspreferenssiä jota valoisuus (SunCalc) ja kerrostumiskausi siirtävät; pelagiset (muikku, silakka) pisteytetään termokliiniarvion tuntumaan, ja keväällä/syksyllä (ei kerrostumaa) niiden indeksi tyhjenee tarkoituksella. Termokliini on kalenteri+leveysaste-heuristiikka, ei mitattua lämpötilaa.
+- Kun indeksi käyttää Traficomin dataa, kartalla näytetään: "Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia."
+- Olosuhteet tänään (HUD-merkki): ilmanpaineen 3 h trendi (Open-Meteo) + kuunkierto ja parhaat ajat (SunCalc). Ei riipu sijainnista kartalla.
+- Syvyystiilet (6 km) cachetetaan IndexedDB:hen: TTL 30 pv, enintään 150 tiiltä / 12 Mt, LRU-siivous. Paneelissa tila ja tyhjennys.
+- 3D-näkymä rakennetaan samasta syvyysruudukosta; three.js ladataan cdnjs:stä vasta näkymää avattaessa.
+- 3D-näkymän Seuraa-tila: kamera seuraa venettä GPS-sijainnin ja suunnan mukaan ja näyttää pohjan muodot ajosuuntaan; syvyys veneen alla otsikkorivillä. Analyysialue rakennetaan lennossa uudelleen veneen ympärille kun ajetaan reunalle. Raahaus vaihtaa vapaaseen kameraan.
 
 ## Datalähteet
 
@@ -24,9 +39,9 @@ Plotteri käyttää julkisia kartta- ja ympäristöaineistoja useista lähteist�
 - Maanmittauslaitos (MML): maastokartta ja paikannimihaku.
 - OpenStreetMap: taustakartta ja POI-kohteet.
 - Traficom: julkiset merikarttatiilet.
-- Suomen ympäristökeskus (SYKE): WMS-karttatasot.
+- Suomen ympäristökeskus (SYKE): WMS-karttatasot ja järvisyvyysdata WFS-vektoreina.
 - Ilmatieteen laitos (FMI): WMS-sadetutka.
-- Open-Meteo: säädata, pyöristetyillä koordinaateilla.
+- Open-Meteo: säädata ja ilmanpaineen trendi, pyöristetyillä koordinaateilla.
 - Vesijärven syvyysalueiden GeoJSON-lähde, joka on määritelty sovelluksessa.
 
 Osa palveluista voi edellyttää käyttäjän omaa API-avainta. MML API-avain tallennetaan vain käyttäjän selaimeen, eikä sitä ole mukana repossa.
@@ -40,6 +55,7 @@ Plotteri on staattinen selainapp. Sillä ei ole omaa sovelluspalvelinta.
 - MML API-avain tallennetaan selaimeen, koska MML:n avoimen avaimen malli on tarkoitettu selainkäyttöön.
 - Säähaut lähettävät Open-Meteolle pyöristetyn sijainnin.
 - Tile-cache tallentaa vain ne karttatiilet, joita käyttäjä on oikeasti katsonut.
+- Syvyystiilet cachetetaan IndexedDB:hen rajatulla määrällä ja säilytysajalla.
 - FMI:n sadetutkaa ei cacheteta, koska sääkuva vanhenee nopeasti.
 
 Selaimen, käyttöjärjestelmän tai käyttäjän oma tyhjennys voi poistaa paikalliset tiedot. Tärkeät reitit ja kalapaikat kannattaa viedä talteen tarvittaessa.
@@ -76,6 +92,9 @@ Käytä paikallista web-palvelinta suoran `index.html`-avauksen sijaan, koska se
 
 ```text
 index.html              Pääsovellus
+analysis.js             Kalapaikka-analyysin laskenta (syvyysruudukko, gradientti, tuulialtistus, päiväkerroin)
+analysis-worker.js      Web Worker, joka ajaa analyysilaskennan pois karttasäikeestä
+view3d.js               Järven 3D-syvyysnäkymä (lazy-ladattava)
 map-sw.js               Service worker katsottujen tilejen cachelle
 manifest.json           PWA-manifesti
 icons/plotteri-icon.svg PWA-ikoni
@@ -94,6 +113,9 @@ https://lith.fi/app/map/
 Julkaisukohde odottaa näitä staattisia tiedostoja sellaisenaan:
 
 - `index.html`
+- `analysis.js`
+- `analysis-worker.js`
+- `view3d.js`
 - `map-sw.js`
 - `manifest.json`
 - `icons/plotteri-icon.svg`
