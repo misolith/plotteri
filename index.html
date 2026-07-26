@@ -314,6 +314,9 @@
  </div>
  <div id="hud-row2">
  <button id="day-chip" class="mono hud-pill" title="Olosuhteet tänään">🎣 --</button>
+ <div id="hud-depth-pill" class="hud-pill" title="Karttasyvyys syvyyskäyrädatan perusteella, ei navigointiin">
+ <span id="hud-depth" class="mono">syvyys --</span>
+ </div>
  <div id="hud-coords-pill" class="hud-pill" title="Sijainti">
  <span id="hud-coords" class="mono">haetaan sijaintia</span>
  </div>
@@ -846,6 +849,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var dayParts = document.getElementById('day-parts');
  var dayTimes = document.getElementById('day-times');
  var dayClose = document.getElementById('day-close');
+ var hudDepth = document.getElementById('hud-depth');
+ var hudDepthPill = document.getElementById('hud-depth-pill');
  var indexToggle = document.getElementById('index-toggle');
  var speciesSelect = document.getElementById('species-select');
  var btn3d = document.getElementById('btn-3d');
@@ -1844,9 +1849,38 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var lastAnalysis = null;
  var indexOverlay = null;
  var lastDepthTrimAt = 0;
+ var depthProbeTimer = null;
+ var depthProbeInFlight = false;
 
  function setDepthStatus(text) {
  depthStatus.textContent = text;
+ }
+
+ function formatMapDepth(depthM) {
+ if (typeof depthM !== 'number' || !isFinite(depthM) || depthM < 0) return null;
+ if (depthM < 10) return depthM.toFixed(1) + ' m';
+ return Math.round(depthM) + ' m';
+ }
+
+ function sampleAnalysisDepth(a, lat, lon) {
+ if (!a || !a.hasData || !a.depth || !a.mask) return null;
+ if (lon < a.west || lon > a.east || lat < a.south || lat > a.north) return null;
+ var gx = Math.floor((lon - a.west) / a.cellLon);
+ var gy = Math.floor((lat - a.south) / a.cellLat);
+ if (gx < 0 || gx >= a.nx || gy < 0 || gy >= a.ny) return null;
+ var idx = gy * a.nx + gx;
+ if (!a.mask[idx]) return null;
+ var depthM = Number(a.depth[idx]);
+ return isFinite(depthM) ? depthM : null;
+ }
+
+ function updateMapDepthHud() {
+ var depthM = currentPos ? sampleAnalysisDepth(lastAnalysis, currentPos.lat, currentPos.lon) : null;
+ var label = formatMapDepth(depthM);
+ hudDepth.textContent = label ? 'syvyys ' + label : 'syvyys --';
+ hudDepthPill.title = label
+ ? 'Karttasyvyys syvyyskäyrädatan perusteella: noin ' + label + '. Ei navigointiin.'
+ : 'Karttasyvyys ei saatavilla tässä pisteessä';
  }
 
  function depthTileKeysForBounds(bounds) {
@@ -2327,16 +2361,45 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  vb.getNorth() <= lastAnalysis.north - marginLat;
  }
 
+ function analysisCoversPoint(lat, lon) {
+ if (!lastAnalysis) return false;
+ return lon >= lastAnalysis.west && lon <= lastAnalysis.east &&
+ lat >= lastAnalysis.south && lat <= lastAnalysis.north;
+ }
+
+ function scheduleDepthProbe() {
+ clearTimeout(depthProbeTimer);
+ depthProbeTimer = setTimeout(async function () {
+ if (!currentPos || depthProbeInFlight || map.getZoom() < DEPTH_MIN_ZOOM) {
+ updateMapDepthHud();
+ return;
+ }
+ if (lastAnalysis && lastAnalysis.hasData && analysisCoversPoint(currentPos.lat, currentPos.lon)) {
+ updateMapDepthHud();
+ return;
+ }
+ depthProbeInFlight = true;
+ try {
+ await runDepthWork(true);
+ } finally {
+ depthProbeInFlight = false;
+ updateMapDepthHud();
+ }
+ }, 900);
+ }
+
  async function runDepthWork(force) {
  clearTimeout(depthWorkTimer);
  if (!map.hasLayer(fishIndexLayer) && !force) return null;
  if (map.getZoom() < DEPTH_MIN_ZOOM) {
  clearIndexOverlay();
  setDepthStatus('Lähennä järvelle (zoom 12+), niin indeksi lasketaan.');
+ updateMapDepthHud();
  return null;
  }
  if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
  lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
+ updateMapDepthHud();
  return lastAnalysis.hasData ? lastAnalysis : null;
  }
  var bounds = map.getBounds().pad(0.2);
@@ -2355,6 +2418,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  clearIndexOverlay();
  setTraficomAttribution(false);
  setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE järville, Traficom merelle sekä Vuoksen ja Kymijoen vesistöihin).');
+ updateMapDepthHud();
  if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
  return null;
  }
@@ -2366,6 +2430,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
  (usesTraficom ? ' ' + TRAFICOM_FULL_ATTRIBUTION : ''));
  drawIndexOverlay(a);
+ updateMapDepthHud();
  return a;
  }
 
@@ -2773,6 +2838,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  hudWeather.title = 'Säätietoa haetaan';
  }
  hudSpeed.textContent = formatSpeed(currentSpeedKmh);
+ updateMapDepthHud();
  }
 
  function windDirectionLabel(deg) {
@@ -2860,6 +2926,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (view3dHandle) view3dHandle.updateBoat(latitude, longitude, boatHeading);
  updateHud();
  if (weatherMode === 'gps') fetchWeather(latitude, longitude, 'GPS');
+ scheduleDepthProbe();
 
  if (!posMarker) {
  posMarker = L.circleMarker([latitude, longitude], {
@@ -2904,6 +2971,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  map.on('dragstart', function () {
  stopFollowingForMapTarget();
+ });
+
+ map.on('moveend zoomend', function () {
+ scheduleDepthProbe();
  });
  map.on('moveend', function () {
  if (weatherMode !== 'map') return;
@@ -3661,6 +3732,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  updateHud();
+ scheduleDepthProbe();
  indexToggle.checked = !!settings.indexVisible;
  speciesSelect.value = currentSpeciesKey();
  if (settings.indexVisible) scheduleDepthWork();
@@ -3671,6 +3743,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  fetchDayConditions: fetchDayConditions,
  open3d: open3d,
  getAnalysis: function () { return lastAnalysis; },
+ sampleCurrentDepth: function () { return currentPos ? sampleAnalysisDepth(lastAnalysis, currentPos.lat, currentPos.lon) : null; },
  getDayScore: function () { return lastDayScore; },
  get3d: function () { return view3dHandle; },
  getBuildSeq: function () { return depthBuildSeq; }
