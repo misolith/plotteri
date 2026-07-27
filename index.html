@@ -719,6 +719,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
  }
 
+ function normalizeDeg(value) {
+ return ((value % 360) + 360) % 360;
+ }
+
+ function smoothHeadingDeg(current, next, factor) {
+ if (current == null || !isFinite(current)) return normalizeDeg(next);
+ var delta = ((normalizeDeg(next) - normalizeDeg(current) + 540) % 360) - 180;
+ return normalizeDeg(current + delta * factor);
+ }
+
  function formatSpeed(speedKmh) {
  return speedKmh != null && isFinite(speedKmh) ? speedKmh.toFixed(1) + ' km/h' : '-- km/h';
  }
@@ -2451,7 +2461,61 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var view3dLoading = false;
  var view3dHandle = null;
  var boatHeading = null;
+ var gpsCourseHeading = null;
+ var compassBoatHeading = null;
+ var compassHeadingAt = 0;
+ var compassListening = false;
+ var lastCompass3dUpdateAt = 0;
  var rebuild3dInFlight = false;
+
+ function freshCompassHeading() {
+ return compassBoatHeading != null && Date.now() - compassHeadingAt < 2500;
+ }
+
+ function selectedBoatHeading() {
+ return freshCompassHeading() ? compassBoatHeading : gpsCourseHeading;
+ }
+
+ function onCompassHeading(nextHeading) {
+ if (nextHeading == null || !isFinite(nextHeading)) return;
+ compassBoatHeading = smoothHeadingDeg(compassBoatHeading, nextHeading, 0.18);
+ compassHeadingAt = Date.now();
+ boatHeading = selectedBoatHeading();
+ if (view3dHandle && currentPos && compassHeadingAt - lastCompass3dUpdateAt > 120) {
+ lastCompass3dUpdateAt = compassHeadingAt;
+ view3dHandle.updateBoat(currentPos.lat, currentPos.lon, boatHeading);
+ }
+ }
+
+ function readCompassHeading(e) {
+ if (e && typeof e.webkitCompassHeading === 'number' && isFinite(e.webkitCompassHeading)) {
+ return e.webkitCompassHeading;
+ }
+ if (e && typeof e.alpha === 'number' && isFinite(e.alpha)) {
+ return normalizeDeg(360 - e.alpha);
+ }
+ return null;
+ }
+
+ function handleDeviceOrientation(e) {
+ onCompassHeading(readCompassHeading(e));
+ }
+
+ async function ensureCompassHeading() {
+ if (compassListening) return;
+ if (typeof window === 'undefined' || typeof window.DeviceOrientationEvent === 'undefined') return;
+ try {
+ if (typeof window.DeviceOrientationEvent.requestPermission === 'function') {
+ var permission = await window.DeviceOrientationEvent.requestPermission();
+ if (permission !== 'granted') return;
+ }
+ window.addEventListener('deviceorientationabsolute', handleDeviceOrientation, true);
+ window.addEventListener('deviceorientation', handleDeviceOrientation, true);
+ compassListening = true;
+ } catch (e) {
+ console.warn('Kompassisuunnan käyttöönotto epäonnistui:', e);
+ }
+ }
 
  async function rebuild3dAround(lat, lon) {
  if (rebuild3dInFlight || !view3dHandle || !lastAnalysis) return;
@@ -2481,6 +2545,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  showToast('Lähennä järvelle (zoom 12+) ennen 3D-näkymää');
  return;
  }
+ await ensureCompassHeading();
  view3dLoading = true;
  showToast('Valmistellaan 3D-näkymää…');
  try {
@@ -2501,7 +2566,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  onClose: function () { view3dHandle = null; },
  onNearEdge: rebuild3dAround
  });
- if (currentPos) view3dHandle.updateBoat(currentPos.lat, currentPos.lon, boatHeading);
+ if (currentPos) view3dHandle.updateBoat(currentPos.lat, currentPos.lon, selectedBoatHeading());
  } catch (e) {
  console.error('3D-näkymän avaus epäonnistui:', e);
  showToast('3D-näkymän lataus epäonnistui');
@@ -2919,10 +2984,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  currentPos = { lat: latitude, lon: longitude, accuracy: accuracy, t: now };
  var gpsHeading = Number(pos.coords.heading);
  if (!isNaN(gpsHeading) && currentSpeedKmh != null && currentSpeedKmh > 1) {
- boatHeading = gpsHeading;
+ gpsCourseHeading = gpsHeading;
  } else if (previousPos && haversine(previousPos.lat, previousPos.lon, latitude, longitude) > 3) {
- boatHeading = bearingDeg(previousPos.lat, previousPos.lon, latitude, longitude);
+ gpsCourseHeading = bearingDeg(previousPos.lat, previousPos.lon, latitude, longitude);
  }
+ boatHeading = selectedBoatHeading();
  if (view3dHandle) view3dHandle.updateBoat(latitude, longitude, boatHeading);
  updateHud();
  if (weatherMode === 'gps') fetchWeather(latitude, longitude, 'GPS');

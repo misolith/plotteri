@@ -17,6 +17,7 @@ export var SCORE_WEIGHTS = {
   // pyyhkaisymatka: tayteen vaikutukseen tarvitaan ~2 km avovetta tuulen puolella
   fetchSaturateM: 2000,
   fetchMaxM: 2500,
+  slopeWindBonus: 0.18,
   minScoreToShow: 0.12
 };
 
@@ -220,14 +221,14 @@ export function buildAnalysis(input) {
   var points = [];
   soundings.forEach(function (p) {
     if (p.x < west - 0.01 || p.x > east + 0.01 || p.y < south - 0.01 || p.y > north + 0.01) return;
-    points.push({ x: p.x, y: p.y, d: p.d });
+    points.push({ x: p.x, y: p.y, d: p.d, kind: 'sounding' });
   });
   contours.forEach(function (c) {
     c.lines.forEach(function (line) {
       for (var i = 0; i < line.length; i++) {
         var p = line[i];
         if (p[0] < west - 0.01 || p[0] > east + 0.01 || p[1] < south - 0.01 || p[1] > north + 0.01) continue;
-        points.push({ x: p[0], y: p[1], d: c.d });
+        points.push({ x: p[0], y: p[1], d: c.d, kind: 'contour' });
       }
     });
   });
@@ -258,15 +259,16 @@ export function buildAnalysis(input) {
     var bx = Math.floor((lon - west) / binLon);
     var by = Math.floor((lat - south) / binLat);
     var found = [];
+    var maxDistSq = maxDistM * maxDistM;
     for (var ring = 0; ring <= maxRing; ring++) {
       for (var dx = -ring; dx <= ring; dx++) {
         for (var dy = -ring; dy <= ring; dy++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
           var arr = bins.get((bx + dx) + ':' + (by + dy));
-          if (arr) found = found.concat(arr);
+          if (arr) found.push.apply(found, arr);
         }
       }
-      if (found.length >= 6 && ring >= 1) break;
+      if (found.length >= 6 && ring >= 1 && hasDepthVariety(found, lon, lat, maxDistSq)) break;
     }
     if (!found.length) return NaN;
     var num = 0, den = 0, count = 0;
@@ -275,14 +277,30 @@ export function buildAnalysis(input) {
       var dxm = (p.x - lon) * mPerLon;
       var dym = (p.y - lat) * mPerLat;
       var distSq = dxm * dxm + dym * dym;
-      if (distSq > maxDistM * maxDistM) continue;
-      if (distSq < 25) return p.d;
-      var wgt = 1 / distSq;
+      if (distSq > maxDistSq) continue;
+      if (p.kind === 'sounding' && distSq < 25) return p.d;
+      var wgt = 1 / Math.max(distSq, 25);
       num += wgt * p.d;
       den += wgt;
       count++;
     }
     return count ? num / den : NaN;
+  }
+
+  function hasDepthVariety(pointsFound, lon, lat, maxDistSq) {
+    var firstDepth = null;
+    for (var i = 0; i < pointsFound.length; i++) {
+      var p = pointsFound[i];
+      var dxm = (p.x - lon) * mPerLon;
+      var dym = (p.y - lat) * mPerLat;
+      if (dxm * dxm + dym * dym > maxDistSq) continue;
+      if (firstDepth == null) {
+        firstDepth = p.d;
+      } else if (Math.abs(p.d - firstDepth) > 0.05) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // 3) vesimaski syvyysvyohykkeista (fallback: IDW-osumat)
@@ -315,12 +333,21 @@ export function buildAnalysis(input) {
     for (gx = 0; gx < nx; gx++) {
       idx = gy * nx + gx;
       if (!mask[idx]) continue;
-      var dl = mask[gy * nx + Math.max(0, gx - 1)] ? depth[gy * nx + Math.max(0, gx - 1)] : depth[idx];
-      var dr = mask[gy * nx + Math.min(nx - 1, gx + 1)] ? depth[gy * nx + Math.min(nx - 1, gx + 1)] : depth[idx];
-      var dd = mask[Math.max(0, gy - 1) * nx + gx] ? depth[Math.max(0, gy - 1) * nx + gx] : depth[idx];
-      var du = mask[Math.min(ny - 1, gy + 1) * nx + gx] ? depth[Math.min(ny - 1, gy + 1) * nx + gx] : depth[idx];
-      var gxm = (dr - dl) / (2 * cellM);
-      var gym = (du - dd) / (2 * cellM);
+      var d0 = depth[idx];
+      var li = gx > 0 ? gy * nx + gx - 1 : -1;
+      var ri = gx < nx - 1 ? gy * nx + gx + 1 : -1;
+      var di = gy > 0 ? (gy - 1) * nx + gx : -1;
+      var ui = gy < ny - 1 ? (gy + 1) * nx + gx : -1;
+      var hasL = li >= 0 && mask[li];
+      var hasR = ri >= 0 && mask[ri];
+      var hasD = di >= 0 && mask[di];
+      var hasU = ui >= 0 && mask[ui];
+      var gxm = hasL && hasR ? (depth[ri] - depth[li]) / (2 * cellM) :
+        hasR ? (depth[ri] - d0) / cellM :
+        hasL ? (d0 - depth[li]) / cellM : 0;
+      var gym = hasD && hasU ? (depth[ui] - depth[di]) / (2 * cellM) :
+        hasU ? (depth[ui] - d0) / cellM :
+        hasD ? (d0 - depth[di]) / cellM : 0;
       slope[idx] = Math.sqrt(gxm * gxm + gym * gym);
     }
   }
@@ -430,6 +457,8 @@ export function buildAnalysis(input) {
   var wWind = weights.wind * windScale * (traits ? traits.shoreAffinity : 1);
   var wPref = weights.depthPref;
   var wSum = wSlope + wWind + wPref;
+  var slopeWindBonus = Math.max(0, weights.slopeWindBonus || 0);
+  var interactionAffinity = traits ? Math.min(traits.structureAffinity || 0, traits.shoreAffinity || 0) : 1;
   var hasAny = false;
   // karkeammassa ruudukossa gradientti laimenee; skaalataan kynnys solukoon mukaan
   var slopeNormEff = weights.slopeNormPerMeter * Math.min(1, Math.sqrt(50 / cellM));
@@ -442,6 +471,7 @@ export function buildAnalysis(input) {
       ? pelagicPreference(depth[idx], thermoDepthM, (traits.thermoOffsetM || 0) - effShift)
       : depthPreference(depth[idx], traits ? traits.depth : null, effShift, strat);
     var s = (wSlope * slopeN + wWind * windExp[idx] + wPref * pref) / wSum;
+    s = Math.min(1, s + slopeWindBonus * interactionAffinity * slopeN * windExp[idx]);
     score[idx] = s;
     if (s >= weights.minScoreToShow) hasAny = true;
   }
