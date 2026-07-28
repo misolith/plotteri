@@ -2230,11 +2230,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.35 + 0.45 * t))];
  }
 
+ var ZANDER_BREAK_MIN_VISIBLE = 0.34;
+
  function zanderBreakColor(s) {
- var t = Math.max(0, Math.min(1, s));
- var cyan = [52, 211, 153], amber = [245, 158, 11], rose = [244, 63, 94];
- var rgb = t < 0.55 ? lerpColor(cyan, amber, t / 0.55) : lerpColor(amber, rose, (t - 0.55) / 0.45);
- return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.32 + 0.50 * t))];
+ var t = Math.max(0, Math.min(1, (s - ZANDER_BREAK_MIN_VISIBLE) / (1 - ZANDER_BREAK_MIN_VISIBLE)));
+ var yellow = [250, 204, 21], amber = [245, 158, 11], rose = [244, 63, 94];
+ var rgb = t < 0.45 ? lerpColor(yellow, amber, t / 0.45) : lerpColor(amber, rose, (t - 0.45) / 0.55);
+ return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.18 + 0.62 * t))];
  }
 
  function isIndexVisibleCell(a, x, y) {
@@ -2289,7 +2291,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!a || !a.zanderBreak || !a.zanderBreak.edge) return false;
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
- return !!(a.mask[idx] && a.zanderBreak.edge[idx] >= 0.12);
+ return !!(a.mask[idx] && a.zanderBreak.edge[idx] >= ZANDER_BREAK_MIN_VISIBLE);
  }
 
  function sampleZanderBreakCoverage(a, gx, gy) {
@@ -2387,11 +2389,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  for (var px = 0; px < canvas.width; px++) {
  var gx = (px + 0.5) / scale - 0.5;
  var coverage = sampleZanderBreakCoverage(a, gx, gy);
- if (coverage < 0.15) continue;
+ if (coverage < 0.22) continue;
  var score = sampleZanderBreakScore(a, gx, gy);
- if (score < 0.12) continue;
+ if (score < ZANDER_BREAK_MIN_VISIBLE) continue;
  var col = zanderBreakColor(score);
- col[3] = Math.round(col[3] * Math.min(1, coverage * 1.55));
+ col[3] = Math.round(col[3] * Math.min(1, coverage * 1.35));
  var pix = (py * canvas.width + px) * 4;
  img.data[pix] = col[0];
  img.data[pix + 1] = col[1];
@@ -2405,8 +2407,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (zanderBreakOverlay) {
  zanderBreakOverlay.setUrl(url);
  zanderBreakOverlay.setBounds(overlayBounds);
+ zanderBreakOverlay.setOpacity(0.86);
  } else {
- zanderBreakOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false, className: 'zander-break-image' });
+ zanderBreakOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.86, interactive: false, className: 'zander-break-image' });
  zanderBreakOverlay.addTo(zanderBreakLayer);
  }
  }
