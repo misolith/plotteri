@@ -407,6 +407,7 @@ function buildZanderBreakLayer(params) {
   var strong = new Uint8Array(params.nx * params.ny);
   var pairLo = new Float32Array(params.nx * params.ny);
   var pairHi = new Float32Array(params.nx * params.ny);
+  var centerSigned = new Float32Array(params.nx * params.ny);
   var values = [];
   var strongCount = 0;
   var deepMax = maxDepthWithin(params.depth, params.mask, params.nx, params.ny, params.cellM, 300);
@@ -415,6 +416,7 @@ function buildZanderBreakLayer(params) {
   for (var idx = 0; idx < params.nx * params.ny; idx++) {
     pairLo[idx] = NaN;
     pairHi[idx] = NaN;
+    centerSigned[idx] = NaN;
     if (!params.mask[idx]) continue;
     var d = params.depth[idx];
     if (!isFinite(d)) continue;
@@ -441,6 +443,7 @@ function buildZanderBreakLayer(params) {
     edgeRaw[idx] = raw;
     pairLo[idx] = lo.d;
     pairHi[idx] = hi.d;
+    centerSigned[idx] = lo.dist[idx] - hi.dist[idx];
     values.push(raw);
     if (grad > 0.045 && overlap > 0.5 && dropTerm > 0.25 && refuge > 0.25) {
       strong[idx] = 1;
@@ -463,6 +466,7 @@ function buildZanderBreakLayer(params) {
     strong: strong,
     pairLo: pairLo,
     pairHi: pairHi,
+    centerSigned: centerSigned,
     p50: p50,
     p95: p95,
     strongCount: strongCount,
