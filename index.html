@@ -668,17 +668,24 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return fallback;
  }
  }
+ function shouldMirrorToLocalStorage(key) {
+ return key === 'settings' || key === 'active_track' || key === 'waypoints';
+ }
+
  async function saveJSON(key, value) {
  try {
  var serialized = JSON.stringify(value);
- if (window.localStorage && (key === 'settings' || key === 'active_track')) {
+ if (window.localStorage && shouldMirrorToLocalStorage(key)) {
  window.localStorage.setItem('kalastusplotteri:' + key, serialized);
  }
  await idbSet(key, serialized);
  return true;
  } catch (e) {
  try {
- if (window.localStorage) window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
+ if (window.localStorage && shouldMirrorToLocalStorage(key)) {
+ window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
+ return true;
+ }
  } catch (fallbackError) { /* no writable storage available */ }
  console.error('Tallennus epaonnistui:', key, e);
  return false;
@@ -3209,9 +3216,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  t: Date.now()
  };
  waypoints.push(wp);
- await saveJSON('waypoints', waypoints);
+ var saved = await saveJSON('waypoints', waypoints);
  addWaypointMarker(wp);
  renderWaypointList();
+ if (!saved) showToast('Kalapaikan tallennus epäonnistui. Se voi kadota uudelleenlatauksessa.');
  markerModal.classList.add('hidden');
  });
 
@@ -3525,8 +3533,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (wp._marker) wp._marker.openPopup();
  } else if (e.target.classList.contains('wp-del')) {
  if (wp._marker) map.removeLayer(wp._marker);
+ var previousWaypoints = waypoints;
  waypoints = waypoints.filter(function (w) { return w.id !== id; });
- await saveJSON('waypoints', waypoints);
+ var saved = await saveJSON('waypoints', waypoints);
+ if (!saved) {
+ waypoints = previousWaypoints;
+ addWaypointMarker(wp);
+ showToast('Kalapaikan poistoa ei saatu tallennettua.');
+ }
  renderWaypointList();
  }
  });
@@ -3730,7 +3744,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  importedTracks.forEach(function (trk) {
  tracks.push(trk);
  });
- await saveJSON('waypoints', waypoints);
+ var waypointsSaved = await saveJSON('waypoints', waypoints);
+ if (!waypointsSaved) throw new Error('kalapaikkojen tallennus epäonnistui');
  var tracksSaved = await saveTracksMerged(tracks);
  if (!tracksSaved) throw new Error('reittien tallennus epäonnistui');
  renderWaypointList();
