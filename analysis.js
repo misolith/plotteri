@@ -233,11 +233,20 @@ function dt1d(f, n) {
   var d = new Float64Array(n);
   var v = new Int32Array(n);
   var z = new Float64Array(n + 1);
+  var first = -1;
+  for (var qi = 0; qi < n; qi++) {
+    if (isFinite(f[qi]) && f[qi] < 1e19) { first = qi; break; }
+  }
+  if (first < 0) {
+    for (qi = 0; qi < n; qi++) d[qi] = Infinity;
+    return d;
+  }
   var k = 0;
-  v[0] = 0;
+  v[0] = first;
   z[0] = -Infinity;
   z[1] = Infinity;
-  for (var q = 1; q < n; q++) {
+  for (var q = first + 1; q < n; q++) {
+    if (!isFinite(f[q]) || f[q] >= 1e19) continue;
     var s;
     do {
       s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
@@ -313,6 +322,32 @@ function percentileFromValues(values, p) {
   return values[idx];
 }
 
+function maxDepthWithin(depth, mask, nx, ny, cellM, meters) {
+  var radius = Math.max(1, Math.ceil(meters / Math.max(1, cellM)));
+  var radiusSq = radius * radius;
+  var out = new Float32Array(nx * ny);
+  for (var y = 0; y < ny; y++) {
+    for (var x = 0; x < nx; x++) {
+      var idx = y * nx + x;
+      var best = mask[idx] && isFinite(depth[idx]) ? depth[idx] : -Infinity;
+      for (var oy = -radius; oy <= radius; oy++) {
+        var yy = y + oy;
+        if (yy < 0 || yy >= ny) continue;
+        for (var ox = -radius; ox <= radius; ox++) {
+          if (ox * ox + oy * oy > radiusSq) continue;
+          var xx = x + ox;
+          if (xx < 0 || xx >= nx) continue;
+          var nIdx = yy * nx + xx;
+          if (!mask[nIdx] || !isFinite(depth[nIdx])) continue;
+          if (depth[nIdx] > best) best = depth[nIdx];
+        }
+      }
+      out[idx] = isFinite(best) ? best : NaN;
+    }
+  }
+  return out;
+}
+
 function buildZanderBreakLayer(params) {
   var levels = contourLevelLines(params.contours, params.bands).filter(function (level) {
     return level.lines.length && level.d > 0;
@@ -335,6 +370,7 @@ function buildZanderBreakLayer(params) {
   var pairHi = new Float32Array(params.nx * params.ny);
   var values = [];
   var strongCount = 0;
+  var deepMax = maxDepthWithin(params.depth, params.mask, params.nx, params.ny, params.cellM, 300);
   var effShift = (params.lightShiftM || 0) * (SPECIES_TRAITS.kuha.lightSens || 1);
   var traits = SPECIES_TRAITS.kuha;
   for (var idx = 0; idx < params.nx * params.ny; idx++) {
@@ -358,13 +394,16 @@ function buildZanderBreakLayer(params) {
     var overlap = prefOverlap(lo.d, hi.d, traits.depth, effShift, params.strat || 0);
     var grad = drop / run;
     var gate = overlap * overlap * overlap;
-    var raw = grad * gate;
-    if (raw <= 0) continue;
+    var dropTerm = Math.min(1, drop / 8);
+    if (!isFinite(deepMax[idx])) continue;
+    var refuge = Math.min(1, Math.max(0, (deepMax[idx] - 8) / 8));
+    var raw = grad * gate * dropTerm * refuge;
+    if (!isFinite(raw) || raw <= 0) continue;
     edgeRaw[idx] = raw;
     pairLo[idx] = lo.d;
     pairHi[idx] = hi.d;
     values.push(raw);
-    if (grad > 0.045 && overlap > 0.5) {
+    if (grad > 0.045 && overlap > 0.5 && dropTerm > 0.25 && refuge > 0.25) {
       strong[idx] = 1;
       strongCount++;
     }

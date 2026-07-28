@@ -2291,6 +2291,18 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  ];
  }
 
+ function zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy) {
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
+ var idx = y * a.nx + x;
+ if (!ridgeMask[idx] || !a.mask[idx]) return false;
+ if (Math.abs(ox) === 1 && Math.abs(oy) === 1) {
+ var sideA = cell.y * a.nx + x;
+ var sideB = y * a.nx + cell.x;
+ if (!a.mask[sideA] || !a.mask[sideB]) return false;
+ }
+ return true;
+ }
+
  function zanderBreakTraceComponent(a, component, ridgeMask) {
  var compSet = new Set();
  for (var i = 0; i < component.length; i++) compSet.add(component[i].idx);
@@ -2303,7 +2315,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) continue;
  var idx = y * a.nx + x;
  if (onlySet && !compSet.has(idx)) continue;
- if (!ridgeMask[idx]) continue;
+ if (!zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy)) continue;
  out.push({ x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y) });
  }
  }
@@ -2380,7 +2392,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var nx = cell.x + ox, ny = cell.y + oy;
  if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) continue;
  var nIdx = ny * a.nx + nx;
- if (!ridgeMask[nIdx] || visited[nIdx]) continue;
+ if (visited[nIdx] || !zanderBreakCanStep(a, ridgeMask, cell, nx, ny, ox, oy)) continue;
  visited[nIdx] = 1;
  queue.push({ x: nx, y: ny, idx: nIdx, score: zanderBreakCellScore(a, nx, ny) });
  }
@@ -2843,9 +2855,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setTraficomAttribution(usesTraficom);
  var zanderBreakStatus = '';
  if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
+ var hist = a.zanderBreak.p95 > 0
+ ? ', edge p50/p95 ' + a.zanderBreak.p50.toFixed(3) + '/' + a.zanderBreak.p95.toFixed(3)
+ : '';
  zanderBreakStatus = a.zanderBreak.hasAny
- ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua'
- : ', ei selkeää kuha-taitetta tässä näkymässä';
+ ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua' + hist
+ : ', ei selkeää kuha-taitetta tässä näkymässä' + hist;
  }
  setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
  (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
