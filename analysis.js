@@ -315,7 +315,7 @@ function percentileFromValues(values, p) {
 
 function buildZanderBreakLayer(params) {
   var levels = contourLevelLines(params.contours, params.bands).filter(function (level) {
-    return level.lines.length && level.d >= 0;
+    return level.lines.length && level.d > 0;
   });
   if (levels.length < 2) return null;
   var grid = {
@@ -330,9 +330,11 @@ function buildZanderBreakLayer(params) {
   });
   var edgeRaw = new Float32Array(params.nx * params.ny);
   var edge = new Float32Array(params.nx * params.ny);
+  var strong = new Uint8Array(params.nx * params.ny);
   var pairLo = new Float32Array(params.nx * params.ny);
   var pairHi = new Float32Array(params.nx * params.ny);
   var values = [];
+  var strongCount = 0;
   var effShift = (params.lightShiftM || 0) * (SPECIES_TRAITS.kuha.lightSens || 1);
   var traits = SPECIES_TRAITS.kuha;
   for (var idx = 0; idx < params.nx * params.ny; idx++) {
@@ -352,29 +354,40 @@ function buildZanderBreakLayer(params) {
     var run = lo.dist[idx] + hi.dist[idx];
     var drop = hi.d - lo.d;
     if (!isFinite(run) || run < params.cellM * 0.75 || drop <= 0) continue;
+    if (run > 350) continue;
     var overlap = prefOverlap(lo.d, hi.d, traits.depth, effShift, params.strat || 0);
-    var raw = (drop / run) * overlap;
+    var grad = drop / run;
+    var gate = overlap * overlap * overlap;
+    var raw = grad * gate;
     if (raw <= 0) continue;
     edgeRaw[idx] = raw;
     pairLo[idx] = lo.d;
     pairHi[idx] = hi.d;
     values.push(raw);
+    if (grad > 0.045 && overlap > 0.5) {
+      strong[idx] = 1;
+      strongCount++;
+    }
   }
+  var p50 = percentileFromValues(values.slice(), 0.50) || 0;
   var p95 = percentileFromValues(values, 0.95) || 0;
   var hasAny = false;
   if (p95 > 0) {
     for (idx = 0; idx < edgeRaw.length; idx++) {
       if (!edgeRaw[idx]) continue;
       edge[idx] = Math.min(1, edgeRaw[idx] / p95);
-      if (edge[idx] >= 0.12) hasAny = true;
+      if (strong[idx]) hasAny = true;
     }
   }
   return {
     edge: edge,
     raw: edgeRaw,
+    strong: strong,
     pairLo: pairLo,
     pairHi: pairHi,
+    p50: p50,
     p95: p95,
+    strongCount: strongCount,
     levelCount: levelData.length,
     hasAny: hasAny
   };

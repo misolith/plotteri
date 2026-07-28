@@ -2288,10 +2288,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  function isZanderBreakCell(a, x, y) {
- if (!a || !a.zanderBreak || !a.zanderBreak.edge) return false;
+ if (!a || !a.zanderBreak || !a.zanderBreak.edge || !a.zanderBreak.strong) return false;
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
- return !!(a.mask[idx] && a.zanderBreak.edge[idx] >= ZANDER_BREAK_MIN_VISIBLE);
+ return !!(a.mask[idx] && a.zanderBreak.strong[idx]);
  }
 
  function sampleZanderBreakCoverage(a, gx, gy) {
@@ -2391,7 +2391,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var coverage = sampleZanderBreakCoverage(a, gx, gy);
  if (coverage < 0.22) continue;
  var score = sampleZanderBreakScore(a, gx, gy);
- if (score < ZANDER_BREAK_MIN_VISIBLE) continue;
+ if (score <= 0) continue;
  var col = zanderBreakColor(score);
  col[3] = Math.round(col[3] * Math.min(1, coverage * 1.35));
  var pix = (py * canvas.width + px) * 4;
@@ -2697,10 +2697,17 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
  setTraficomAttribution(usesTraficom);
+ var zanderBreakStatus = '';
+ if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
+ zanderBreakStatus = a.zanderBreak.hasAny
+ ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua'
+ : ', ei selkeää kuha-taitetta tässä näkymässä';
+ }
  setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
  (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
  ', ruudukko ' + a.nx + '×' + a.ny +
  (a.zanderBreak && a.zanderBreak.levelCount ? ', kuha-käyriä ' + a.zanderBreak.levelCount + ' tasoa' : '') +
+ zanderBreakStatus +
  (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
  (usesTraficom ? ' ' + TRAFICOM_FULL_ATTRIBUTION : ''));
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(a); else clearIndexOverlay();
