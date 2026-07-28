@@ -673,9 +673,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return key === 'settings' || key === 'active_track' || key === 'waypoints';
  }
 
+ function serializeForStorage(value) {
+ return JSON.stringify(value, function (key, item) {
+ if (key && key.charAt(0) === '_') return undefined;
+ return item;
+ });
+ }
+
  async function saveJSON(key, value) {
  try {
- var serialized = JSON.stringify(value);
+ var serialized = serializeForStorage(value);
  if (window.localStorage && shouldMirrorToLocalStorage(key)) {
  window.localStorage.setItem('kalastusplotteri:' + key, serialized);
  }
@@ -684,7 +691,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  } catch (e) {
  try {
  if (window.localStorage && shouldMirrorToLocalStorage(key)) {
- window.localStorage.setItem('kalastusplotteri:' + key, JSON.stringify(value));
+ window.localStorage.setItem('kalastusplotteri:' + key, serializeForStorage(value));
  return true;
  }
  } catch (fallbackError) { /* no writable storage available */ }
