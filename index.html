@@ -2273,15 +2273,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  function zanderBreakCenterCrossing(a, x, y) {
- if (!zanderBreakStrongAt(a, x, y)) return null;
  var idx = y * a.nx + x;
  var s0 = zanderBreakCenterSigned(a, x, y);
  if (!isFinite(s0)) return null;
+ var strong0 = zanderBreakStrongAt(a, x, y);
  var best = null;
  function consider(nx, ny, dir) {
  if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) return;
  var nIdx = ny * a.nx + nx;
- if (!zanderBreakStrongAt(a, nx, ny) || !zanderBreakPairMatches(a, idx, nIdx)) return;
+ var strong1 = zanderBreakStrongAt(a, nx, ny);
+ if ((!strong0 && !strong1) || !zanderBreakPairMatches(a, idx, nIdx)) return;
  var s1 = zanderBreakCenterSigned(a, nx, ny);
  if (!isFinite(s1)) return;
  var crossed = s0 === 0 || s0 * s1 < 0;
@@ -2297,7 +2298,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  consider(x + 1, y, 'right');
  consider(x, y + 1, 'up');
- if (!best && s0 === 0) {
+ if (!best && strong0 && s0 === 0) {
  best = { x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5, score: zanderBreakCellScore(a, x, y), dir: 'zero' };
  }
  return best;
@@ -2720,7 +2721,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function analysisCacheKeyFromSnap(snap, sp) {
  return [
- 'analysis:v3',
+ 'analysis:v4',
  snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
  snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
  windAnalysisKey(), sp.speciesKey,

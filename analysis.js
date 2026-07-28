@@ -303,6 +303,105 @@ function distanceTransform(src, nx, ny, cellM) {
   return out;
 }
 
+function distSqPointToSegment(px, py, ax, ay, bx, by) {
+  var vx = bx - ax, vy = by - ay;
+  var lenSq = vx * vx + vy * vy;
+  if (lenSq <= 0) {
+    var dx0 = px - ax, dy0 = py - ay;
+    return dx0 * dx0 + dy0 * dy0;
+  }
+  var t = ((px - ax) * vx + (py - ay) * vy) / lenSq;
+  if (t < 0) t = 0;
+  else if (t > 1) t = 1;
+  var dx = px - (ax + vx * t), dy = py - (ay + vy * t);
+  return dx * dx + dy * dy;
+}
+
+function buildContourSegmentIndex(level, params) {
+  var mPerLon = params.mPerLon || params.cellM / Math.max(params.cellLon, 1e-12);
+  var mPerLat = params.mPerLat || params.cellM / Math.max(params.cellLat, 1e-12);
+  var binM = Math.max(120, params.cellM * 3);
+  var bins = new Map();
+  var segments = [];
+  function addToBin(bx, by, segIdx) {
+    var key = bx + ':' + by;
+    var arr = bins.get(key);
+    if (!arr) { arr = []; bins.set(key, arr); }
+    arr.push(segIdx);
+  }
+  (level.lines || []).forEach(function (line) {
+    for (var i = 1; i < line.length; i++) {
+      var a = line[i - 1], b = line[i];
+      if (!a || !b) continue;
+      var ax = (a[0] - params.west) * mPerLon;
+      var ay = (a[1] - params.south) * mPerLat;
+      var bx = (b[0] - params.west) * mPerLon;
+      var by = (b[1] - params.south) * mPerLat;
+      if (!isFinite(ax) || !isFinite(ay) || !isFinite(bx) || !isFinite(by)) continue;
+      var seg = { ax: ax, ay: ay, bx: bx, by: by };
+      var segIdx = segments.length;
+      segments.push(seg);
+      var minBx = Math.floor(Math.min(ax, bx) / binM);
+      var maxBx = Math.floor(Math.max(ax, bx) / binM);
+      var minBy = Math.floor(Math.min(ay, by) / binM);
+      var maxBy = Math.floor(Math.max(ay, by) / binM);
+      for (var yy = minBy; yy <= maxBy; yy++) {
+        for (var xx = minBx; xx <= maxBx; xx++) addToBin(xx, yy, segIdx);
+      }
+    }
+  });
+  return { binM: binM, bins: bins, segments: segments };
+}
+
+function nearestContourDistance(index, px, py, maxM) {
+  if (!index || !index.segments.length) return Infinity;
+  var binM = index.binM;
+  var bx0 = Math.floor(px / binM);
+  var by0 = Math.floor(py / binM);
+  var maxRing = Math.ceil((maxM || Infinity) / binM) + 1;
+  if (!isFinite(maxRing)) maxRing = 80;
+  var bestSq = Infinity;
+  var seen = new Set();
+  for (var ring = 0; ring <= maxRing; ring++) {
+    for (var by = by0 - ring; by <= by0 + ring; by++) {
+      for (var bx = bx0 - ring; bx <= bx0 + ring; bx++) {
+        if (Math.max(Math.abs(bx - bx0), Math.abs(by - by0)) !== ring) continue;
+        var arr = index.bins.get(bx + ':' + by);
+        if (!arr) continue;
+        for (var i = 0; i < arr.length; i++) {
+          var segIdx = arr[i];
+          if (seen.has(segIdx)) continue;
+          seen.add(segIdx);
+          var seg = index.segments[segIdx];
+          var dSq = distSqPointToSegment(px, py, seg.ax, seg.ay, seg.bx, seg.by);
+          if (dSq < bestSq) bestSq = dSq;
+        }
+      }
+    }
+    if (isFinite(bestSq)) {
+      var searchedM = (ring + 1) * binM;
+      if (searchedM * searchedM > bestSq + 2 * binM * binM) break;
+    }
+  }
+  return isFinite(bestSq) ? Math.sqrt(bestSq) : Infinity;
+}
+
+function vectorDistanceToContourLevel(level, params, maxM) {
+  var out = new Float32Array(params.nx * params.ny);
+  var mPerLon = params.mPerLon || params.cellM / Math.max(params.cellLon, 1e-12);
+  var mPerLat = params.mPerLat || params.cellM / Math.max(params.cellLat, 1e-12);
+  var index = buildContourSegmentIndex(level, params);
+  for (var y = 0; y < params.ny; y++) {
+    var py = (y + 0.5) * params.cellLat * mPerLat;
+    for (var x = 0; x < params.nx; x++) {
+      var idx = y * params.nx + x;
+      var px = (x + 0.5) * params.cellLon * mPerLon;
+      out[idx] = nearestContourDistance(index, px, py, maxM);
+    }
+  }
+  return out;
+}
+
 function prefOverlap(dLo, dHi, preset, shift, strat) {
   if (!isFinite(dLo) || !isFinite(dHi) || dHi <= dLo) return 0;
   var w = [1, 4, 2, 4, 1];
@@ -389,9 +488,9 @@ function maxDepthWithin(depth, mask, nx, ny, cellM, meters) {
 
 function buildZanderBreakLayer(params) {
   var MAX_ZANDER_BREAK_RUN_M = 550;
-  var MIN_ZANDER_BREAK_GRAD = 0.018;
+  var MIN_ZANDER_BREAK_GRAD = 0.025;
   var MIN_ZANDER_BREAK_OVERLAP = 0.35;
-  var MIN_ZANDER_BREAK_DROP_TERM = 0.5;
+  var MIN_ZANDER_BREAK_DROP_TERM = 0.3;
   var MIN_ZANDER_BREAK_REFUGE = 0.15;
   var levels = contourLevelLines(params.contours, params.bands).filter(function (level) {
     return level.lines.length && level.d > 0;
@@ -404,7 +503,10 @@ function buildZanderBreakLayer(params) {
   var levelData = levels.map(function (level) {
     return {
       d: level.d,
-      dist: distanceTransform(rasterizeContourLevel(level, grid), params.nx, params.ny, params.cellM)
+      dist: vectorDistanceToContourLevel(level, Object.assign({}, grid, {
+        mPerLon: params.mPerLon,
+        mPerLat: params.mPerLat
+      }), MAX_ZANDER_BREAK_RUN_M)
     };
   });
   var edgeRaw = new Float32Array(params.nx * params.ny);
@@ -429,6 +531,7 @@ function buildZanderBreakLayer(params) {
     var bestRaw = 0;
     var bestLo = null;
     var bestHi = null;
+    var bestGrad = 0;
     for (var i = 0; i < levelData.length - 1; i++) {
       var lo = levelData[i];
       var hi = levelData[i + 1];
@@ -441,7 +544,6 @@ function buildZanderBreakLayer(params) {
       var gate = overlap * overlap * overlap;
       var dropTerm = Math.min(1, drop / 8);
       if (
-        grad < MIN_ZANDER_BREAK_GRAD ||
         overlap < MIN_ZANDER_BREAK_OVERLAP ||
         dropTerm < MIN_ZANDER_BREAK_DROP_TERM ||
         refuge < MIN_ZANDER_BREAK_REFUGE
@@ -451,6 +553,7 @@ function buildZanderBreakLayer(params) {
       bestRaw = raw;
       bestLo = lo;
       bestHi = hi;
+      bestGrad = grad;
     }
     if (!bestLo || !bestHi) continue;
     edgeRaw[idx] = bestRaw;
@@ -458,8 +561,10 @@ function buildZanderBreakLayer(params) {
     pairHi[idx] = bestHi.d;
     centerSigned[idx] = bestLo.dist[idx] - bestHi.dist[idx];
     values.push(bestRaw);
-    strong[idx] = 1;
-    strongCount++;
+    if (bestGrad >= MIN_ZANDER_BREAK_GRAD) {
+      strong[idx] = 1;
+      strongCount++;
+    }
   }
   var p50 = percentileFromValues(values.slice(), 0.50) || 0;
   var p95 = percentileFromValues(values, 0.95) || 0;
@@ -790,6 +895,8 @@ export function buildAnalysis(input) {
     cellLon: cellLon,
     cellLat: cellLat,
     cellM: cellM,
+    mPerLon: mPerLon,
+    mPerLat: mPerLat,
     depth: depth,
     mask: mask,
     lightShiftM: lightShiftM,
