@@ -2582,7 +2582,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return;
  }
  clearZanderBreakOverlay();
- var lines = buildZanderBreakPolylines(a);
+ var lines = a._zanderBreakPolylines || buildZanderBreakPolylines(a);
+ a._zanderBreakPolylines = lines;
  if (!lines.length) return;
  for (var i = 0; i < lines.length; i++) {
  var line = lines[i];
@@ -2605,6 +2606,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var analysisWorkerBroken = false;
  var analysisWorkerMsgSeq = 0;
  var analysisWorkerPending = new Map();
+ var ANALYSIS_RESULT_TTL_MS = 60 * 60 * 1000;
+ var ANALYSIS_RESULT_MAX_ENTRIES = 12;
+ var analysisResultCache = new Map();
 
  function ensureAnalysisWorker() {
  if (analysisWorkerBroken || typeof Worker === 'undefined') return null;
@@ -2691,6 +2695,41 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  Math.round(p.strat * 20) + '|' + (map.hasLayer(zanderBreakLayer) ? 'zander' : 'base');
  }
 
+ function analysisCacheKeyFromSnap(snap, sp) {
+ return [
+ 'analysis:v2',
+ snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
+ snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
+ windAnalysisKey(), sp.speciesKey,
+ Math.round((sp.lightShiftM || 0) * 10), Math.round((sp.strat || 0) * 100),
+ Math.round(sp.thermoDepthM || 0), map.hasLayer(zanderBreakLayer) ? 'zander' : 'base'
+ ].join('|');
+ }
+
+ function loadCachedAnalysisResult(key) {
+ var hit = analysisResultCache.get(key);
+ if (!hit) return null;
+ if (Date.now() - hit.t > ANALYSIS_RESULT_TTL_MS) {
+ analysisResultCache.delete(key);
+ return null;
+ }
+ analysisResultCache.delete(key);
+ analysisResultCache.set(key, hit);
+ hit.result._analysisCacheHit = true;
+ hit.result._analysisCacheKey = key;
+ return hit.result;
+ }
+
+ function storeAnalysisResult(key, result) {
+ if (!key || !result) return;
+ result._analysisCacheHit = false;
+ result._analysisCacheKey = key;
+ analysisResultCache.set(key, { t: Date.now(), result: result });
+ while (analysisResultCache.size > ANALYSIS_RESULT_MAX_ENTRIES) {
+ analysisResultCache.delete(analysisResultCache.keys().next().value);
+ }
+ }
+
  var ANALYSIS_ANCHOR_LAT = 62;
  function snapAnalysisBounds(bounds, cellM) {
  var cellLat = cellM / 111320;
@@ -2709,6 +2748,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  async function buildAnalysisForBounds(bounds, cellM) {
  var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
  var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
+ var analysisCacheKey = analysisCacheKeyFromSnap(snap, sp);
+ var cachedAnalysis = loadCachedAnalysisResult(analysisCacheKey);
+ if (cachedAnalysis) return cachedAnalysis;
  if (!analysisWorkerBroken) {
  try {
  var res = await workerRequest(Object.assign({
@@ -2724,6 +2766,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (res.result) {
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
+ storeAnalysisResult(analysisCacheKey, res.result);
  }
  return res.result;
  } catch (e) {
@@ -2764,6 +2807,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (a) {
  a.reqCellM = snap.cellM;
  a.sources = [];
+ storeAnalysisResult(analysisCacheKey, a);
  }
  return a;
  }
@@ -2916,6 +2960,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
  (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
  ', ruudukko ' + a.nx + '×' + a.ny +
+ (a._analysisCacheHit ? ', cache' : '') +
  (a.zanderBreak && a.zanderBreak.levelCount ? ', kuha-käyriä ' + a.zanderBreak.levelCount + ' tasoa' : '') +
  zanderBreakStatus +
  (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
