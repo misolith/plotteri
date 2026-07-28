@@ -192,19 +192,27 @@ function tagSource(features, source) {
   return features;
 }
 
-async function getTile(key) {
+async function getTile(key, stats) {
   var mem = memTiles.get(key);
-  if (mem && Date.now() - mem.t < TILE_TTL_MS) return mem;
-  if (fetching.has(key)) return fetching.get(key);
+  if (mem && Date.now() - mem.t < TILE_TTL_MS) {
+    if (stats) stats.mem++;
+    return mem;
+  }
+  if (fetching.has(key)) {
+    if (stats) stats.wait++;
+    return fetching.get(key);
+  }
   var promise = (async function () {
     try {
       var cached = await idbGet(TILE_CACHE_PREFIX + key);
       if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
         putMem(key, cached.value);
+        if (stats) stats.disk++;
         return cached.value;
       }
     } catch (e) { /* cache-luku epaonnistui, haetaan verkosta */ }
     var tile = await fetchTile(key);
+    if (stats) stats.fetch++;
     putMem(key, tile);
     var size = 0;
     try { size = JSON.stringify(tile).length; } catch (e) { size = 100000; }
@@ -223,16 +231,17 @@ async function ensureTiles(keys, onProgress) {
   var results = [];
   var queue = keys.slice();
   var done = 0;
+  var stats = { mem: 0, disk: 0, fetch: 0, wait: 0 };
   async function work() {
     while (queue.length) {
       var key = queue.shift();
       try {
-        results.push(await getTile(key));
+        results.push(await getTile(key, stats));
       } catch (e) {
         console.warn('Syvyystiilen haku epäonnistui:', key, e);
       }
       done++;
-      if (onProgress) onProgress(done, keys.length);
+      if (onProgress) onProgress(done, keys.length, stats);
     }
   }
   await Promise.all([work(), work(), work()]);
@@ -261,8 +270,15 @@ async function handleBuild(msg) {
   } catch (e) { /* persistent analysis cache miss */ }
   var keys = tileKeysForBounds(msg);
   if (keys.length > MAX_TILES) return { result: null, reason: 'toowide' };
-  var tiles = await ensureTiles(keys, function (done, total) {
-    self.postMessage({ id: msg.id, progress: { done: done, total: total } });
+  var tiles = await ensureTiles(keys, function (done, total, stats) {
+    self.postMessage({ id: msg.id, progress: {
+      done: done,
+      total: total,
+      mem: stats.mem,
+      disk: stats.disk,
+      fetch: stats.fetch,
+      wait: stats.wait
+    } });
   });
   var contourById = new Map();
   var bandById = new Map();

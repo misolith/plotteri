@@ -1960,6 +1960,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var depthProbeTimer = null;
  var depthProbeInFlight = false;
  var depthStatusText = '';
+ var depthTileProgress = null;
 
  function setDepthStatus(text) {
  depthStatus.textContent = text;
@@ -1985,6 +1986,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  parts.push('<span>cell ' + analysisCellM() + ' m</span>');
  parts.push('<span>worker ' + (pending ? pending + ' pending' : 'idle') + '</span>');
  parts.push('<span>memcache ' + (analysisResultCache ? analysisResultCache.size : 0) + '</span>');
+ if (depthTileProgress && depthTileProgress.total) {
+ parts.push('<span>tiles ' + depthTileProgress.done + '/' + depthTileProgress.total +
+ ' m' + depthTileProgress.mem + ' d' + depthTileProgress.disk + ' f' + depthTileProgress.fetch +
+ (depthTileProgress.wait ? ' w' + depthTileProgress.wait : '') + '</span>');
+ }
  if (lastAnalysis) {
  parts.push('<span>grid ' + lastAnalysis.nx + '×' + lastAnalysis.ny + '</span>');
  if (lastAnalysis._analysisCacheHit) parts.push('<span>cache hit</span>');
@@ -2992,7 +2998,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
  var analysisCacheKey = analysisCacheKeyFromSnap(snap, sp);
  var cachedAnalysis = loadCachedAnalysisResult(analysisCacheKey);
- if (cachedAnalysis) return cachedAnalysis;
+ if (cachedAnalysis) {
+ depthTileProgress = null;
+ return cachedAnalysis;
+ }
  if (!analysisWorkerBroken) {
  try {
  var res = await workerRequest(Object.assign({
@@ -3002,10 +3011,23 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  wind: effectiveAnalysisWind(), windKey: windAnalysisKey(),
  includeZanderBreak: map.hasLayer(zanderBreakLayer)
  }, sp), function (p) {
- if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
+ depthTileProgress = {
+ done: p.done || 0,
+ total: p.total || 0,
+ mem: p.mem || 0,
+ disk: p.disk || 0,
+ fetch: p.fetch || 0,
+ wait: p.wait || 0
+ };
+ if (p.total > 1) {
+ var source = 'mem ' + depthTileProgress.mem + ', levy ' + depthTileProgress.disk + ', verkko ' + depthTileProgress.fetch;
+ if (depthTileProgress.wait) source += ', odottaa ' + depthTileProgress.wait;
+ setDepthStatus('Syvyystiilet ' + p.done + '/' + p.total + ' (' + source + ')…');
+ }
  });
  if (res.reason === 'toowide') return null;
  if (res.result) {
+ depthTileProgress = null;
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
  storeAnalysisResult(analysisCacheKey, res.result);
