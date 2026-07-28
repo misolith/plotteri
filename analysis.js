@@ -324,25 +324,64 @@ function percentileFromValues(values, p) {
 
 function maxDepthWithin(depth, mask, nx, ny, cellM, meters) {
   var radius = Math.max(1, Math.ceil(meters / Math.max(1, cellM)));
-  var radiusSq = radius * radius;
+  var tmp = new Float32Array(nx * ny);
   var out = new Float32Array(nx * ny);
+  var deque = new Int32Array(Math.max(nx, ny));
   for (var y = 0; y < ny; y++) {
+    var head = 0, tail = 0;
+    var right = -1;
     for (var x = 0; x < nx; x++) {
-      var idx = y * nx + x;
-      var best = mask[idx] && isFinite(depth[idx]) ? depth[idx] : -Infinity;
-      for (var oy = -radius; oy <= radius; oy++) {
-        var yy = y + oy;
-        if (yy < 0 || yy >= ny) continue;
-        for (var ox = -radius; ox <= radius; ox++) {
-          if (ox * ox + oy * oy > radiusSq) continue;
-          var xx = x + ox;
-          if (xx < 0 || xx >= nx) continue;
-          var nIdx = yy * nx + xx;
-          if (!mask[nIdx] || !isFinite(depth[nIdx])) continue;
-          if (depth[nIdx] > best) best = depth[nIdx];
+      var targetRight = Math.min(nx - 1, x + radius);
+      while (right < targetRight) {
+        right++;
+        var add = right;
+        var addIdx = y * nx + add;
+        var addVal = mask[addIdx] && isFinite(depth[addIdx]) ? depth[addIdx] : -Infinity;
+        while (tail > head) {
+          var last = deque[tail - 1];
+          var lastIdx = y * nx + last;
+          var lastVal = mask[lastIdx] && isFinite(depth[lastIdx]) ? depth[lastIdx] : -Infinity;
+          if (lastVal > addVal) break;
+          tail--;
         }
+        deque[tail++] = add;
       }
-      out[idx] = isFinite(best) ? best : NaN;
+      while (tail > head && deque[head] < x - radius) head++;
+      if (tail > head) {
+        var bestIdx = y * nx + deque[head];
+        tmp[y * nx + x] = mask[bestIdx] && isFinite(depth[bestIdx]) ? depth[bestIdx] : -Infinity;
+      } else {
+        tmp[y * nx + x] = -Infinity;
+      }
+    }
+  }
+  for (x = 0; x < nx; x++) {
+    head = 0;
+    tail = 0;
+    right = -1;
+    for (y = 0; y < ny; y++) {
+      targetRight = Math.min(ny - 1, y + radius);
+      while (right < targetRight) {
+        right++;
+        add = right;
+        addIdx = add * nx + x;
+        addVal = tmp[addIdx];
+        while (tail > head) {
+          last = deque[tail - 1];
+          lastIdx = last * nx + x;
+          lastVal = tmp[lastIdx];
+          if (lastVal > addVal) break;
+          tail--;
+        }
+        deque[tail++] = add;
+      }
+      while (tail > head && deque[head] < y - radius) head++;
+      if (tail > head) {
+        bestIdx = deque[head] * nx + x;
+        out[y * nx + x] = isFinite(tmp[bestIdx]) ? tmp[bestIdx] : NaN;
+      } else {
+        out[y * nx + x] = NaN;
+      }
     }
   }
   return out;
@@ -726,7 +765,7 @@ export function buildAnalysis(input) {
     if (s >= weights.minScoreToShow) hasAny = true;
   }
 
-  var zanderBreak = buildZanderBreakLayer({
+  var zanderBreak = input.includeZanderBreak === false ? null : buildZanderBreakLayer({
     contours: contours,
     bands: bands,
     nx: nx,

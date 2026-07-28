@@ -241,7 +241,8 @@ async function ensureTiles(keys, onProgress) {
 async function handleBuild(msg) {
   var cacheKey = [msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
     msg.speciesKey, Math.round((msg.lightShiftM || 0) * 10),
-    Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0)].join('|');
+    Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0),
+    msg.includeZanderBreak ? 'zander' : 'base'].join('|');
   var hit = resultCache.get(cacheKey);
   if (hit && Date.now() - hit.t < RESULT_TTL_MS) {
     resultCache.delete(cacheKey);
@@ -277,7 +278,8 @@ async function handleBuild(msg) {
     east: msg.east,
     north: msg.north,
     cellLonDeg: msg.cellLonDeg,
-    cellLatDeg: msg.cellLatDeg
+    cellLatDeg: msg.cellLatDeg,
+    includeZanderBreak: !!msg.includeZanderBreak
   });
   var sources = Object.keys(sourceSet);
   resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });

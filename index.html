@@ -2173,6 +2173,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  // ---------- analyysin rakennus ja overlay ----------
  function scheduleDepthWork() {
  clearTimeout(depthWorkTimer);
+ if (lastAnalysis && !analysisCoversView()) {
+ if (map.hasLayer(fishIndexLayer)) clearIndexOverlay();
+ if (map.hasLayer(zanderBreakLayer)) clearZanderBreakOverlay();
+ }
  depthWorkTimer = setTimeout(function () { runDepthWork(false); }, 700);
  }
 
@@ -2291,6 +2295,30 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  ];
  }
 
+ function smoothZanderBreakLatLngs(latlngs) {
+ if (!latlngs || latlngs.length < 3) return latlngs || [];
+ var pts = latlngs.slice();
+ var rounds = pts.length > 6 ? 2 : 1;
+ for (var r = 0; r < rounds; r++) {
+ var out = [pts[0]];
+ for (var i = 0; i < pts.length - 1; i++) {
+ var a = pts[i];
+ var b = pts[i + 1];
+ out.push([
+ a[0] * 0.75 + b[0] * 0.25,
+ a[1] * 0.75 + b[1] * 0.25
+ ]);
+ out.push([
+ a[0] * 0.25 + b[0] * 0.75,
+ a[1] * 0.25 + b[1] * 0.75
+ ]);
+ }
+ out.push(pts[pts.length - 1]);
+ pts = out;
+ }
+ return pts;
+ }
+
  function zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy) {
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
@@ -2406,6 +2434,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  maxScore = Math.max(maxScore, cell.score);
  return zanderBreakLatLng(a, cell);
  });
+ latlngs = smoothZanderBreakLatLngs(latlngs);
  if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: maxScore, cells: ordered.length });
  }
  }
@@ -2564,6 +2593,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  opacity: 0.86,
  lineCap: 'round',
  lineJoin: 'round',
+ smoothFactor: 1.5,
  interactive: false,
  className: 'zander-break-line'
  }).addTo(zanderBreakLayer);
@@ -2615,6 +2645,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  });
  }
 
+ function cancelPendingAnalysisWorker() {
+ if (!analysisWorker || !analysisWorkerPending.size) return;
+ var err = new Error('worker canceled');
+ analysisWorkerPending.forEach(function (p) { p.reject(err); });
+ analysisWorkerPending.clear();
+ analysisWorker.terminate();
+ analysisWorker = null;
+ analysisWorkerBroken = false;
+ }
+
  function analysisCellM() {
  var z = map.getZoom();
  return z >= 14 ? 50 : z >= 13 ? 100 : 200;
@@ -2647,7 +2687,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  function analysisParamsKey() {
  var center = map.getCenter();
  var p = speciesBuildParams(center.lat, center.lng);
- return windAnalysisKey() + '|' + p.speciesKey + '|' + Math.round(p.lightShiftM * 4) + '|' + Math.round(p.strat * 20);
+ return windAnalysisKey() + '|' + p.speciesKey + '|' + Math.round(p.lightShiftM * 4) + '|' +
+ Math.round(p.strat * 20) + '|' + (map.hasLayer(zanderBreakLayer) ? 'zander' : 'base');
  }
 
  var ANALYSIS_ANCHOR_LAT = 62;
@@ -2674,7 +2715,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  type: 'build',
  west: snap.west, south: snap.south, east: snap.east, north: snap.north,
  cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
- wind: effectiveAnalysisWind(), windKey: windAnalysisKey()
+ wind: effectiveAnalysisWind(), windKey: windAnalysisKey(),
+ includeZanderBreak: map.hasLayer(zanderBreakLayer)
  }, sp), function (p) {
  if (p.total > 1) setDepthStatus('Haetaan syvyysdataa (' + p.done + '/' + p.total + ' tiiltä)…');
  });
@@ -2685,6 +2727,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  return res.result;
  } catch (e) {
+ if (e && e.message === 'worker canceled') return null;
  console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
  }
  }
@@ -2715,7 +2758,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  east: snap.east,
  north: snap.north,
  cellLonDeg: snap.cellLon,
- cellLatDeg: snap.cellLat
+ cellLatDeg: snap.cellLat,
+ includeZanderBreak: map.hasLayer(zanderBreakLayer)
  });
  if (a) {
  a.reqCellM = snap.cellM;
@@ -2833,10 +2877,17 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var bounds = map.getBounds().pad(0.2);
  var keys = depthTileKeysForBounds(bounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
+ clearIndexOverlay();
+ clearZanderBreakOverlay();
+ lastAnalysis = null;
  setDepthStatus('Näkymä liian laaja syvyysanalyysiin, lähennä lisää.');
+ updateMapDepthHud();
  return null;
  }
  var seq = ++depthBuildSeq;
+ cancelPendingAnalysisWorker();
+ if (map.hasLayer(fishIndexLayer)) clearIndexOverlay();
+ if (map.hasLayer(zanderBreakLayer)) clearZanderBreakOverlay();
  setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)…');
  var a = await buildAnalysisForBounds(bounds);
  if (seq !== depthBuildSeq) return null;
