@@ -114,6 +114,21 @@
  .ctrl-label { font-size: 10px; color: #6f8e99; letter-spacing: 0.03em; }
  #map.mark-pick-mode { cursor: crosshair; }
 
+ #debug-overlay {
+ position: fixed; z-index: 650; left: 10px; right: 10px;
+ bottom: calc(84px + env(safe-area-inset-bottom));
+ max-width: 980px; margin: 0 auto; pointer-events: none;
+ display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px;
+ background: rgba(5,20,28,0.86); border: 1px solid rgba(95,224,200,0.28);
+ border-radius: 8px; padding: 6px 8px;
+ color: #9fc0ca; font-size: 10px; line-height: 1.25;
+ box-shadow: 0 3px 18px rgba(0,0,0,0.38);
+ }
+ #debug-overlay span {
+ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(88vw, 460px);
+ }
+ #debug-overlay .debug-accent { color: #5fe0c8; font-weight: 700; }
+
  .hidden { display: none !important; }
 
  #panel {
@@ -378,6 +393,8 @@
  </div>
 </div>
 
+<div id="debug-overlay" class="hidden mono"></div>
+
 <div id="panel" class="hidden">
  <div class="panel-header">
  <h2>Tiedot ja asetukset</h2>
@@ -443,6 +460,10 @@
  <button id="depth-cache-clear">Tyhjennä syvyyscache</button>
  </div>
  <p id="depth-status" class="hint">Lähennä järvelle (zoom 12+), niin indeksi lasketaan.</p>
+ <label class="settings-row">
+ <span>Debug-status kartalle</span>
+ <input id="debug-toggle" type="checkbox">
+ </label>
  <p class="hint">Indeksi lasketaan SYKEn järvisyvyysdatasta ja Traficomin merisyvyysdatasta: syvänteiden reunat, tuulen altistamat rannat ja syvyysvyöhyke. Traficomin aineisto kattaa avoimena merialueen talousvyöhykkeen sekä Vuoksen ja Kymijoen vesistöt. Olosuhdemerkki (🎣) huomioi ilmanpaineen trendin ja kuunkierron. Traficom: Lähde: Liikenne- ja viestintävirasto. Ei navigointikäyttöön. Ei täytä asianmukaisen merikartan vaatimuksia.</p>
  </section>
 
@@ -899,6 +920,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var btn3d = document.getElementById('btn-3d');
  var depthCacheClear = document.getElementById('depth-cache-clear');
  var depthStatus = document.getElementById('depth-status');
+ var debugToggle = document.getElementById('debug-toggle');
+ var debugOverlay = document.getElementById('debug-overlay');
  var toastEl = document.getElementById('toast');
 
  // ---------- state ----------
@@ -1238,6 +1261,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (settings.wakeLockEnabled == null) settings.wakeLockEnabled = true;
  if (settings.sykeVisible == null) settings.sykeVisible = true;
  if (settings.vesijarviVisible == null) settings.vesijarviVisible = false;
+ if (settings.debugOverlayVisible == null) settings.debugOverlayVisible = false;
  if (!settings.species || !SPECIES_TRAITS[settings.species]) settings.species = 'hauki';
  if (settings.poiMasterVisible == null) settings.poiMasterVisible = true;
  if (!(settings.exaggeration3d >= 1 && settings.exaggeration3d <= 10)) settings.exaggeration3d = 8;
@@ -1267,6 +1291,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  apiKeyInput.value = settings.apiKey || '';
  wakeLockToggle.checked = settings.wakeLockEnabled !== false;
  radarToggle.checked = settings.radarVisible !== false;
+ debugToggle.checked = !!settings.debugOverlayVisible;
  tileCacheEnabled.checked = !!settings.tileCache.enabled;
  tileCacheMax.value = settings.tileCache.maxTiles;
  tileCacheDays.value = settings.tileCache.ttlDays;
@@ -1934,9 +1959,45 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var lastDepthTrimAt = 0;
  var depthProbeTimer = null;
  var depthProbeInFlight = false;
+ var depthStatusText = '';
 
  function setDepthStatus(text) {
  depthStatus.textContent = text;
+ depthStatusText = text || '';
+ updateDebugOverlay();
+ }
+
+ function debugShortStatus(text) {
+ if (!text) return 'idle';
+ return String(text).replace(/\s+/g, ' ').trim();
+ }
+
+ function updateDebugOverlay() {
+ if (!debugOverlay) return;
+ if (!settings || !settings.debugOverlayVisible) {
+ debugOverlay.classList.add('hidden');
+ return;
+ }
+ var parts = [];
+ var pending = analysisWorkerPending ? analysisWorkerPending.size : 0;
+ parts.push('<span class="debug-accent">debug</span>');
+ parts.push('<span>z ' + map.getZoom() + '</span>');
+ parts.push('<span>cell ' + analysisCellM() + ' m</span>');
+ parts.push('<span>worker ' + (pending ? pending + ' pending' : 'idle') + '</span>');
+ parts.push('<span>memcache ' + (analysisResultCache ? analysisResultCache.size : 0) + '</span>');
+ if (lastAnalysis) {
+ parts.push('<span>grid ' + lastAnalysis.nx + '×' + lastAnalysis.ny + '</span>');
+ if (lastAnalysis._analysisCacheHit) parts.push('<span>cache hit</span>');
+ if (map.hasLayer(zanderBreakLayer) && lastAnalysis.zanderBreak) {
+ var z = lastAnalysis.zanderBreak;
+ var lineCount = lastAnalysis._zanderBreakPolylines ? lastAnalysis._zanderBreakPolylines.length : '-';
+ parts.push('<span>kuha ' + (z.strongCount || 0) + ' / lines ' + lineCount + '</span>');
+ if (z.p95 > 0) parts.push('<span>p50/p95 ' + z.p50.toFixed(3) + '/' + z.p95.toFixed(3) + '</span>');
+ }
+ }
+ parts.push('<span>' + escapeHtml(debugShortStatus(depthStatusText)) + '</span>');
+ debugOverlay.innerHTML = parts.join('');
+ debugOverlay.classList.remove('hidden');
  }
 
  function formatMapDepth(depthM) {
@@ -2173,6 +2234,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  // ---------- analyysin rakennus ja overlay ----------
  function scheduleDepthWork() {
  clearTimeout(depthWorkTimer);
+ updateDebugOverlay();
  depthWorkTimer = setTimeout(function () { runDepthWork(false); }, 700);
  }
 
@@ -2778,6 +2840,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  className: 'zander-break-line'
  }).addTo(zanderBreakLayer);
  }
+ updateDebugOverlay();
  }
 
  // ---------- analyysilaskenta workerissa, ruudukko ankkuroitu maailmaan ----------
@@ -3381,6 +3444,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  });
  btn3d.addEventListener('click', open3d);
  depthCacheClear.addEventListener('click', clearDepthCache);
+ debugToggle.addEventListener('change', async function () {
+ settings.debugOverlayVisible = !!debugToggle.checked;
+ await saveJSON('settings', settings);
+ updateDebugOverlay();
+ });
 
  map.on('moveend zoomend', scheduleDepthWork);
  map.on('overlayadd overlayremove', function (e) {
@@ -3948,6 +4016,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  apiKeyInput.value = settings.apiKey || '';
  indexToggle.checked = !!settings.indexVisible;
  speciesSelect.value = currentSpeciesKey();
+ debugToggle.checked = !!settings.debugOverlayVisible;
  updateDepthCacheStatus();
  panel.classList.remove('hidden');
  });
@@ -4523,6 +4592,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  scheduleDepthProbe();
  indexToggle.checked = !!settings.indexVisible;
  speciesSelect.value = currentSpeciesKey();
+ debugToggle.checked = !!settings.debugOverlayVisible;
+ updateDebugOverlay();
  if (settings.indexVisible || settings.zanderBreakVisible) scheduleDepthWork();
  window.__plotteri = {
  map: map,
