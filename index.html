@@ -1931,7 +1931,6 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var depthBuildSeq = 0;
  var lastAnalysis = null;
  var indexOverlay = null;
- var zanderBreakOverlay = null;
  var lastDepthTrimAt = 0;
  var depthProbeTimer = null;
  var depthProbeInFlight = false;
@@ -2185,10 +2184,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  function clearZanderBreakOverlay() {
- if (zanderBreakOverlay) {
- zanderBreakLayer.removeLayer(zanderBreakOverlay);
- zanderBreakOverlay = null;
- }
+ zanderBreakLayer.clearLayers();
  }
 
  function lerpColor(c1, c2, t) {
@@ -2237,6 +2233,172 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var yellow = [250, 204, 21], amber = [245, 158, 11], rose = [244, 63, 94];
  var rgb = t < 0.45 ? lerpColor(yellow, amber, t / 0.45) : lerpColor(amber, rose, (t - 0.45) / 0.55);
  return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.18 + 0.62 * t))];
+ }
+
+ function zanderBreakCssColor(s) {
+ var col = zanderBreakColor(Math.max(ZANDER_BREAK_MIN_VISIBLE, s));
+ return 'rgb(' + col[0] + ',' + col[1] + ',' + col[2] + ')';
+ }
+
+ function zanderBreakCellScore(a, x, y) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.edge) return 0;
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return 0;
+ return a.zanderBreak.edge[y * a.nx + x] || 0;
+ }
+
+ function zanderBreakStrongAt(a, x, y) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.strong) return false;
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
+ var idx = y * a.nx + x;
+ return !!(a.mask[idx] && a.zanderBreak.strong[idx]);
+ }
+
+ function isZanderBreakRidgeCell(a, x, y) {
+ if (!zanderBreakStrongAt(a, x, y)) return false;
+ var s = zanderBreakCellScore(a, x, y);
+ if (s <= 0) return false;
+ var dx = zanderBreakCellScore(a, x + 1, y) - zanderBreakCellScore(a, x - 1, y);
+ var dy = zanderBreakCellScore(a, x, y + 1) - zanderBreakCellScore(a, x, y - 1);
+ var ax = Math.abs(dx), ay = Math.abs(dy);
+ var n1x = 0, n1y = 0, n2x = 0, n2y = 0;
+ if (ax < 1e-6 && ay < 1e-6) {
+ var best = s;
+ for (var oy = -1; oy <= 1; oy++) {
+ for (var ox = -1; ox <= 1; ox++) {
+ if (!ox && !oy) continue;
+ best = Math.max(best, zanderBreakCellScore(a, x + ox, y + oy));
+ }
+ }
+ return s >= best;
+ }
+ if (ax > ay * 1.5) {
+ n1x = 1; n2x = -1;
+ } else if (ay > ax * 1.5) {
+ n1y = 1; n2y = -1;
+ } else if (dx * dy >= 0) {
+ n1x = 1; n1y = 1; n2x = -1; n2y = -1;
+ } else {
+ n1x = 1; n1y = -1; n2x = -1; n2y = 1;
+ }
+ return s >= zanderBreakCellScore(a, x + n1x, y + n1y) &&
+ s >= zanderBreakCellScore(a, x + n2x, y + n2y);
+ }
+
+ function zanderBreakLatLng(a, cell) {
+ return [
+ a.south + (cell.y + 0.5) * a.cellLat,
+ a.west + (cell.x + 0.5) * a.cellLon
+ ];
+ }
+
+ function zanderBreakTraceComponent(a, component, ridgeMask) {
+ var compSet = new Set();
+ for (var i = 0; i < component.length; i++) compSet.add(component[i].idx);
+ function neighbors(cell, onlySet) {
+ var out = [];
+ for (var oy = -1; oy <= 1; oy++) {
+ for (var ox = -1; ox <= 1; ox++) {
+ if (!ox && !oy) continue;
+ var x = cell.x + ox, y = cell.y + oy;
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) continue;
+ var idx = y * a.nx + x;
+ if (onlySet && !compSet.has(idx)) continue;
+ if (!ridgeMask[idx]) continue;
+ out.push({ x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y) });
+ }
+ }
+ return out;
+ }
+ var endpoints = [];
+ var best = component[0];
+ for (i = 0; i < component.length; i++) {
+ var cell = component[i];
+ if (cell.score > best.score) best = cell;
+ if (neighbors(cell, true).length <= 1) endpoints.push(cell);
+ }
+ var start = endpoints.length ? endpoints.sort(function (aCell, bCell) {
+ return bCell.score - aCell.score;
+ })[0] : best;
+ var visited = new Set();
+ var ordered = [];
+ var current = start;
+ var prevIdx = -1;
+ while (current && !visited.has(current.idx)) {
+ visited.add(current.idx);
+ ordered.push(current);
+ var next = null;
+ var ns = neighbors(current, true).filter(function (n) { return n.idx !== prevIdx && !visited.has(n.idx); });
+ ns.sort(function (aCell, bCell) { return bCell.score - aCell.score; });
+ next = ns[0] || null;
+ prevIdx = current.idx;
+ current = next;
+ }
+ if (ordered.length < component.length && endpoints.length) {
+ var tail = endpoints.find(function (cell) { return !visited.has(cell.idx); });
+ if (tail) {
+ current = tail;
+ prevIdx = -1;
+ var prepend = [];
+ while (current && !visited.has(current.idx)) {
+ visited.add(current.idx);
+ prepend.push(current);
+ var ns2 = neighbors(current, true).filter(function (n) { return n.idx !== prevIdx && !visited.has(n.idx); });
+ ns2.sort(function (aCell, bCell) { return bCell.score - aCell.score; });
+ prevIdx = current.idx;
+ current = ns2[0] || null;
+ }
+ ordered = prepend.reverse().concat(ordered);
+ }
+ }
+ return ordered;
+ }
+
+ function buildZanderBreakPolylines(a) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.hasAny) return [];
+ var ridgeMask = new Uint8Array(a.nx * a.ny);
+ for (var y = 0; y < a.ny; y++) {
+ for (var x = 0; x < a.nx; x++) {
+ if (isZanderBreakRidgeCell(a, x, y)) ridgeMask[y * a.nx + x] = 1;
+ }
+ }
+ var visited = new Uint8Array(ridgeMask.length);
+ var lines = [];
+ var minLenM = 150;
+ for (y = 0; y < a.ny; y++) {
+ for (x = 0; x < a.nx; x++) {
+ var startIdx = y * a.nx + x;
+ if (!ridgeMask[startIdx] || visited[startIdx]) continue;
+ var queue = [{ x: x, y: y, idx: startIdx, score: zanderBreakCellScore(a, x, y) }];
+ var component = [];
+ visited[startIdx] = 1;
+ for (var qi = 0; qi < queue.length; qi++) {
+ var cell = queue[qi];
+ component.push(cell);
+ for (var oy = -1; oy <= 1; oy++) {
+ for (var ox = -1; ox <= 1; ox++) {
+ if (!ox && !oy) continue;
+ var nx = cell.x + ox, ny = cell.y + oy;
+ if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) continue;
+ var nIdx = ny * a.nx + nx;
+ if (!ridgeMask[nIdx] || visited[nIdx]) continue;
+ visited[nIdx] = 1;
+ queue.push({ x: nx, y: ny, idx: nIdx, score: zanderBreakCellScore(a, nx, ny) });
+ }
+ }
+ }
+ if (component.length * a.cellM < minLenM) continue;
+ var ordered = zanderBreakTraceComponent(a, component, ridgeMask);
+ if (ordered.length * a.cellM < minLenM) continue;
+ var maxScore = 0;
+ var latlngs = ordered.map(function (cell) {
+ maxScore = Math.max(maxScore, cell.score);
+ return zanderBreakLatLng(a, cell);
+ });
+ if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: maxScore, cells: ordered.length });
+ }
+ }
+ lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
+ return lines;
  }
 
  function isIndexVisibleCell(a, x, y) {
@@ -2378,39 +2540,21 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  clearZanderBreakOverlay();
  return;
  }
- var scale = 8;
- var canvas = document.createElement('canvas');
- canvas.width = a.nx * scale;
- canvas.height = a.ny * scale;
- var ctx = canvas.getContext('2d');
- var img = ctx.createImageData(canvas.width, canvas.height);
- for (var py = 0; py < canvas.height; py++) {
- var gy = a.ny - 1 - ((py + 0.5) / scale - 0.5);
- for (var px = 0; px < canvas.width; px++) {
- var gx = (px + 0.5) / scale - 0.5;
- var coverage = sampleZanderBreakCoverage(a, gx, gy);
- if (coverage < 0.22) continue;
- var score = sampleZanderBreakScore(a, gx, gy);
- if (score <= 0) continue;
- var col = zanderBreakColor(score);
- col[3] = Math.round(col[3] * Math.min(1, coverage * 1.35));
- var pix = (py * canvas.width + px) * 4;
- img.data[pix] = col[0];
- img.data[pix + 1] = col[1];
- img.data[pix + 2] = col[2];
- img.data[pix + 3] = col[3];
- }
- }
- ctx.putImageData(img, 0, 0);
- var url = canvas.toDataURL();
- var overlayBounds = L.latLngBounds([[a.south, a.west], [a.north, a.east]]);
- if (zanderBreakOverlay) {
- zanderBreakOverlay.setUrl(url);
- zanderBreakOverlay.setBounds(overlayBounds);
- zanderBreakOverlay.setOpacity(0.86);
- } else {
- zanderBreakOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.86, interactive: false, className: 'zander-break-image' });
- zanderBreakOverlay.addTo(zanderBreakLayer);
+ clearZanderBreakOverlay();
+ var lines = buildZanderBreakPolylines(a);
+ if (!lines.length) return;
+ for (var i = 0; i < lines.length; i++) {
+ var line = lines[i];
+ var weight = Math.max(2, Math.min(5, 2 + line.score * 3));
+ L.polyline(line.latlngs, {
+ color: zanderBreakCssColor(line.score),
+ weight: weight,
+ opacity: 0.86,
+ lineCap: 'round',
+ lineJoin: 'round',
+ interactive: false,
+ className: 'zander-break-line'
+ }).addTo(zanderBreakLayer);
  }
  }
 
