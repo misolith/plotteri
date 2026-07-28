@@ -227,8 +227,9 @@
  #wp-save { background: #e8a13c !important; color: #05141c !important; border: none !important; font-weight: 600; }
 
  .wp-dot {
- width: 14px; height: 14px; border-radius: 50%; background: #e8a13c;
- border: 2px solid #05141c; box-shadow: 0 0 0 1px #e8a13c;
+ width: 8px; height: 8px; border-radius: 2px; background: #5fe0c8;
+ border: 1px solid #05141c; box-shadow: 0 0 0 1px rgba(95,224,200,0.95), 0 2px 5px rgba(0,0,0,0.42);
+ transform: rotate(45deg);
  }
  .poi-marker {
  width: 24px; height: 24px; border-radius: 50%;
@@ -3165,7 +3166,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  // ---------- waypoints ----------
  function waypointIcon() {
- return L.divIcon({ className: 'wp-icon', html: '<div class="wp-dot"></div>', iconSize: [16, 16], iconAnchor: [8, 8] });
+ return L.divIcon({ className: 'wp-icon', html: '<div class="wp-dot"></div>', iconSize: [10, 10], iconAnchor: [5, 5] });
  }
 
  function popupHtml(wp) {
