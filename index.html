@@ -48,8 +48,16 @@
  border-radius: 16px; padding: 4px 11px; font-size: 12px; font-weight: 700; color: #9fc0ca;
  text-shadow: 0 1px 3px rgba(0,0,0,0.85);
  }
- #hud-coords-pill { flex: 0 1 auto; overflow: hidden; }
- #hud-coords { font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+ #hud-depth-pill {
+ flex: 1 1 auto; justify-content: center; white-space: nowrap;
+ color: #e8a13c; border-color: rgba(232,161,60,0.45);
+ }
+ #hud-location-btn {
+ flex: 0 0 30px; width: 30px; height: 30px; justify-content: center; padding: 0;
+ color: #9fc0ca; border-radius: 50%;
+ }
+ #hud-location-btn.ready { color: #5fe0c8; border-color: rgba(95,224,200,0.45); }
+ #hud-location-btn svg { width: 16px; height: 16px; display: block; }
  .hud-label {
  display: none;
  }
@@ -280,6 +288,15 @@
  transition: opacity 0.3s; opacity: 0; pointer-events: none;
  }
  #toast.show { opacity: 1; }
+ #coord-overlay {
+ position: fixed; top: calc(96px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%);
+ z-index: 850; max-width: min(88vw, 360px);
+ background: rgba(11,35,47,0.96); border: 1px solid rgba(95,224,200,0.42); color: #d8e6ea;
+ border-radius: 8px; padding: 9px 12px; font-size: 12px; font-weight: 700; text-align: center;
+ box-shadow: 0 8px 22px rgba(0,0,0,0.38); pointer-events: none;
+ }
+ #coord-overlay.hidden { display: none; }
+ #coord-overlay .coord-overlay-value { display: block; margin-top: 3px; color: #5fe0c8; font-size: 11px; }
 
  .ctrl-3d {
  background: #0b232f !important; color: #d8e6ea !important;
@@ -316,17 +333,18 @@
  <div id="hud-row2">
  <button id="day-chip" class="mono hud-pill" title="Olosuhteet tänään">🎣 --</button>
  <div id="hud-depth-pill" class="hud-pill" title="Karttasyvyys syvyyskäyrädatan perusteella, ei navigointiin">
- <span id="hud-depth" class="mono">syvyys --</span>
+ <span id="hud-depth" class="mono">Syvyys --</span>
  </div>
- <div id="hud-coords-pill" class="hud-pill" title="Sijainti">
- <span id="hud-coords" class="mono">haetaan sijaintia</span>
- </div>
+ <button id="hud-location-btn" class="hud-pill" type="button" title="Kopioi sijainti" aria-label="Kopioi sijainti">
+ <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>
+ </button>
  </div>
  <div id="rec-indicator" class="hidden">
  <span class="dot"></span><span id="rec-time" class="mono">00:00</span>
  </div>
 </div>
 
+<div id="coord-overlay" class="hidden" role="status" aria-live="polite"></div>
 <div id="toast" role="status"></div>
 
 <div id="controls">
@@ -817,7 +835,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  // ---------- DOM refs ----------
- var hudCoords = document.getElementById('hud-coords');
+ var hudLocationBtn = document.getElementById('hud-location-btn');
+ var coordOverlay = document.getElementById('coord-overlay');
  var hudWind = document.getElementById('hud-wind');
  var hudWindArrow = document.getElementById('hud-wind-arrow');
  var hudWindSpeed = document.getElementById('hud-wind-speed');
@@ -1799,6 +1818,36 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  toastTimer = setTimeout(function () { toastEl.classList.remove('show'); }, 3500);
  }
 
+ var coordOverlayTimer = null;
+ function showCoordOverlay(status, value) {
+ coordOverlay.innerHTML = escapeHtml(status) + (value ? '<span class="coord-overlay-value mono">' + escapeHtml(value) + '</span>' : '');
+ coordOverlay.classList.remove('hidden');
+ clearTimeout(coordOverlayTimer);
+ coordOverlayTimer = setTimeout(function () { coordOverlay.classList.add('hidden'); }, 2600);
+ }
+
+ function formattedCurrentCoordinates() {
+ if (!currentPos) return null;
+ return currentPos.lat.toFixed(5) + ', ' + currentPos.lon.toFixed(5);
+ }
+
+ async function copyCurrentCoordinates() {
+ var coords = formattedCurrentCoordinates();
+ if (!coords) {
+ showCoordOverlay('Sijaintia haetaan', null);
+ return;
+ }
+ try {
+ if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard unavailable');
+ await navigator.clipboard.writeText(coords);
+ showCoordOverlay('Sijainti kopioitu', coords);
+ } catch (e) {
+ showCoordOverlay('Sijainti', coords);
+ }
+ }
+
+ hudLocationBtn.addEventListener('click', copyCurrentCoordinates);
+
  function plainTrack(track) {
  return {
  id: track.id,
@@ -1902,7 +1951,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  function updateMapDepthHud() {
  var depthM = currentPos ? sampleAnalysisDepth(lastAnalysis, currentPos.lat, currentPos.lon) : null;
  var label = formatMapDepth(depthM);
- hudDepth.textContent = label ? 'syvyys ' + label : 'syvyys --';
+ hudDepth.textContent = label ? 'Syvyys ' + label : 'Syvyys --';
  hudDepthPill.title = label
  ? 'Karttasyvyys syvyyskäyrädatan perusteella: noin ' + label + '. Ei navigointiin.'
  : 'Karttasyvyys ei saatavilla tässä pisteessä';
@@ -2897,7 +2946,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function updateHud() {
  if (currentPos) {
- hudCoords.textContent = currentPos.lat.toFixed(5) + ', ' + currentPos.lon.toFixed(5) + ' +/-' + Math.round(currentPos.accuracy) + 'm';
+ hudLocationBtn.classList.add('ready');
+ hudLocationBtn.title = 'Kopioi sijainti ' + formattedCurrentCoordinates() + ' +/-' + Math.round(currentPos.accuracy) + 'm';
+ } else {
+ hudLocationBtn.classList.remove('ready');
+ hudLocationBtn.title = 'Sijaintia haetaan';
  }
  if (currentWind) {
  var windToDeg = (currentWind.direction + 180) % 360;
