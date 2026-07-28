@@ -264,6 +264,7 @@
  }
  .leaflet-control-attribution a { color: #174b6b !important; font-weight: 700; }
  .leaflet-bottom.leaflet-right { bottom: calc(82px + env(safe-area-inset-bottom)); }
+ .fish-index-image { image-rendering: pixelated; }
 
  #day-chip { flex: 0 0 auto; white-space: nowrap; }
  #day-chip.good { color: #7ddf64; border-color: rgba(125,223,100,0.45); }
@@ -2182,29 +2183,61 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  ];
  }
 
- function indexColor(s) {
- var t = Math.max(0, Math.min(1, (s - SCORE_WEIGHTS.minScoreToShow) / (1 - SCORE_WEIGHTS.minScoreToShow)));
+ function percentile(sorted, p) {
+ if (!sorted.length) return null;
+ var idx = Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * p)));
+ return sorted[idx];
+ }
+
+ function scoreColorRange(a) {
+ var values = [];
+ for (var i = 0; i < a.score.length; i++) {
+ if (a.mask[i] && a.score[i] >= SCORE_WEIGHTS.minScoreToShow) values.push(a.score[i]);
+ }
+ if (!values.length) return { lo: SCORE_WEIGHTS.minScoreToShow, hi: 1 };
+ values.sort(function (x, y) { return x - y; });
+ var lo = percentile(values, 0.15);
+ var hi = percentile(values, 0.95);
+ if (hi == null || lo == null || hi - lo < 0.05) {
+ lo = SCORE_WEIGHTS.minScoreToShow;
+ hi = Math.max(lo + 0.05, values[values.length - 1]);
+ }
+ return { lo: lo, hi: hi };
+ }
+
+ function indexColor(s, range) {
+ var lo = range && range.lo != null ? range.lo : SCORE_WEIGHTS.minScoreToShow;
+ var hi = range && range.hi != null ? range.hi : 1;
+ var t = Math.max(0, Math.min(1, (s - lo) / Math.max(0.01, hi - lo)));
  var lime = [196, 240, 66], amber = [240, 152, 40], red = [222, 56, 40];
  var rgb = t < 0.5 ? lerpColor(lime, amber, t * 2) : lerpColor(amber, red, (t - 0.5) * 2);
  return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.35 + 0.45 * t))];
  }
 
  function drawIndexOverlay(a) {
+ var scale = 4;
+ var range = scoreColorRange(a);
  var canvas = document.createElement('canvas');
- canvas.width = a.nx;
- canvas.height = a.ny;
+ canvas.width = a.nx * scale;
+ canvas.height = a.ny * scale;
  var ctx = canvas.getContext('2d');
- var img = ctx.createImageData(a.nx, a.ny);
+ var img = ctx.createImageData(canvas.width, canvas.height);
  for (var gy = 0; gy < a.ny; gy++) {
  for (var gx = 0; gx < a.nx; gx++) {
  var idx = gy * a.nx + gx;
  if (!a.mask[idx] || a.score[idx] < SCORE_WEIGHTS.minScoreToShow) continue;
- var col = indexColor(a.score[idx]);
- var pix = ((a.ny - 1 - gy) * a.nx + gx) * 4;
+ var col = indexColor(a.score[idx], range);
+ var px0 = gx * scale;
+ var py0 = (a.ny - 1 - gy) * scale;
+ for (var sy = 0; sy < scale; sy++) {
+ for (var sx = 0; sx < scale; sx++) {
+ var pix = ((py0 + sy) * canvas.width + px0 + sx) * 4;
  img.data[pix] = col[0];
  img.data[pix + 1] = col[1];
  img.data[pix + 2] = col[2];
  img.data[pix + 3] = col[3];
+ }
+ }
  }
  }
  ctx.putImageData(img, 0, 0);
@@ -2214,7 +2247,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  indexOverlay.setUrl(url);
  indexOverlay.setBounds(overlayBounds);
  } else {
- indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false });
+ indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false, className: 'fish-index-image' });
  indexOverlay.addTo(fishIndexLayer);
  }
  }

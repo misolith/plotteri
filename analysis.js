@@ -252,7 +252,7 @@ export function buildAnalysis(input) {
     arr.push(p);
   });
 
-  var maxDistM = Math.max(400, cellM * 6);
+  var maxDistM = Math.max(180, cellM * 3);
   var maxRing = Math.ceil(maxDistM / binM);
 
   function idw(lon, lat) {
@@ -456,7 +456,6 @@ export function buildAnalysis(input) {
   // paino kasvaa windScalen mukana: heikko tuuli ei pudota muiden signaalien osuutta kertarysayksella
   var wWind = weights.wind * windScale * (traits ? traits.shoreAffinity : 1);
   var wPref = weights.depthPref;
-  var wSum = wSlope + wWind + wPref;
   var slopeWindBonus = Math.max(0, weights.slopeWindBonus || 0);
   var interactionAffinity = traits ? Math.min(traits.structureAffinity || 0, traits.shoreAffinity || 0) : 1;
   var hasAny = false;
@@ -465,12 +464,13 @@ export function buildAnalysis(input) {
   for (idx = 0; idx < nx * ny; idx++) {
     if (!mask[idx]) continue;
     var slopeN = Math.min(1, slope[idx] / slopeNormEff);
-    slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.8) / 1.7));
+    slopeN *= Math.min(1, Math.max(0, (depth[idx] - 0.5) / 0.8));
     // pelagisilla valosiirto mallintaa vuorokausivaellusta: hamarassa parvi nousee
     var pref = isPelagic
       ? pelagicPreference(depth[idx], thermoDepthM, (traits.thermoOffsetM || 0) - effShift)
       : depthPreference(depth[idx], traits ? traits.depth : null, effShift, strat);
-    var s = (wSlope * slopeN + wWind * windExp[idx] + wPref * pref) / wSum;
+    var wWindCell = windExp[idx] > 0 ? wWind : 0;
+    var s = (wSlope * slopeN + wWindCell * windExp[idx] + wPref * pref) / (wSlope + wWindCell + wPref);
     s = Math.min(1, s + slopeWindBonus * interactionAffinity * slopeN * windExp[idx]);
     score[idx] = s;
     if (s >= weights.minScoreToShow) hasAny = true;
