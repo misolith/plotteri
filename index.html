@@ -2173,10 +2173,6 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  // ---------- analyysin rakennus ja overlay ----------
  function scheduleDepthWork() {
  clearTimeout(depthWorkTimer);
- if (lastAnalysis && !analysisCoversView()) {
- if (map.hasLayer(fishIndexLayer)) clearIndexOverlay();
- if (map.hasLayer(zanderBreakLayer)) clearZanderBreakOverlay();
- }
  depthWorkTimer = setTimeout(function () { runDepthWork(false); }, 700);
  }
 
@@ -3105,18 +3101,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var bounds = map.getBounds().pad(0.2);
  var keys = depthTileKeysForBounds(bounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
- clearIndexOverlay();
- clearZanderBreakOverlay();
- lastAnalysis = null;
- setDepthStatus('Näkymä liian laaja syvyysanalyysiin, lähennä lisää.');
+ setDepthStatus('Näkymä liian laaja uuteen syvyysanalyysiin, nykyiset käyrät pidetään kartalla.');
  updateMapDepthHud();
  return null;
  }
  var seq = ++depthBuildSeq;
  cancelPendingAnalysisWorker();
- if (map.hasLayer(fishIndexLayer)) clearIndexOverlay();
- if (map.hasLayer(zanderBreakLayer)) clearZanderBreakOverlay();
- setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)…');
+ setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)… nykyinen overlay pysyy näkyvissä.');
  var a = await buildAnalysisForBounds(bounds);
  if (seq !== depthBuildSeq) return null;
  lastAnalysis = a;
