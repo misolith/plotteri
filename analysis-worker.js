@@ -14,6 +14,7 @@ var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var TILE_CACHE_PREFIX = 't:v3:';
+var RESULT_CACHE_PREFIX = 'r:v6:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -239,7 +240,7 @@ async function ensureTiles(keys, onProgress) {
 }
 
 async function handleBuild(msg) {
-  var cacheKey = [msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
+  var cacheKey = ['analysis:v6', msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
     msg.speciesKey, Math.round((msg.lightShiftM || 0) * 10),
     Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0),
     msg.includeZanderBreak ? 'zander' : 'base'].join('|');
@@ -249,6 +250,15 @@ async function handleBuild(msg) {
     resultCache.set(cacheKey, hit);
     return { result: hit.result, sources: hit.sources, cached: true };
   }
+  try {
+    var diskHit = await idbGet(RESULT_CACHE_PREFIX + cacheKey);
+    if (diskHit && diskHit.value && diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
+      var diskValue = diskHit.value;
+      resultCache.set(cacheKey, { t: diskValue.t, result: diskValue.result, sources: diskValue.sources || [] });
+      while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
+      return { result: diskValue.result, sources: diskValue.sources || [], cached: true };
+    }
+  } catch (e) { /* persistent analysis cache miss */ }
   var keys = tileKeysForBounds(msg);
   if (keys.length > MAX_TILES) return { result: null, reason: 'toowide' };
   var tiles = await ensureTiles(keys, function (done, total) {
@@ -284,6 +294,16 @@ async function handleBuild(msg) {
   var sources = Object.keys(sourceSet);
   resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
   while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
+  try {
+    var rec = { t: Date.now(), result: result, sources: sources };
+    idbPut({
+      key: RESULT_CACHE_PREFIX + cacheKey,
+      value: rec,
+      updated: rec.t,
+      size: JSON.stringify({ sources: sources, nx: result && result.nx, ny: result && result.ny }).length +
+        ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
+    }).then(trimCache).catch(function () {});
+  } catch (e) { /* persistent analysis cache write is best effort */ }
   return { result: result, sources: sources };
 }
 

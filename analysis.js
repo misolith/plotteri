@@ -350,7 +350,7 @@ function buildContourSegmentIndex(level, params) {
       }
     }
   });
-  return { binM: binM, bins: bins, segments: segments };
+  return { binM: binM, bins: bins, segments: segments, seen: new Int32Array(segments.length), seenToken: 1 };
 }
 
 function nearestContourDistance(index, px, py, maxM) {
@@ -361,7 +361,13 @@ function nearestContourDistance(index, px, py, maxM) {
   var maxRing = Math.ceil((maxM || Infinity) / binM) + 1;
   if (!isFinite(maxRing)) maxRing = 80;
   var bestSq = Infinity;
-  var seen = new Set();
+  var seen = index.seen;
+  var token = index.seenToken++;
+  if (index.seenToken > 2147483000) {
+    seen.fill(0);
+    index.seenToken = 2;
+    token = 1;
+  }
   for (var ring = 0; ring <= maxRing; ring++) {
     for (var by = by0 - ring; by <= by0 + ring; by++) {
       for (var bx = bx0 - ring; bx <= bx0 + ring; bx++) {
@@ -370,8 +376,8 @@ function nearestContourDistance(index, px, py, maxM) {
         if (!arr) continue;
         for (var i = 0; i < arr.length; i++) {
           var segIdx = arr[i];
-          if (seen.has(segIdx)) continue;
-          seen.add(segIdx);
+          if (seen[segIdx] === token) continue;
+          seen[segIdx] = token;
           var seg = index.segments[segIdx];
           var dSq = distSqPointToSegment(px, py, seg.ax, seg.ay, seg.bx, seg.by);
           if (dSq < bestSq) bestSq = dSq;
@@ -501,12 +507,14 @@ function buildZanderBreakLayer(params) {
     cellLon: params.cellLon, cellLat: params.cellLat, cellM: params.cellM
   };
   var levelData = levels.map(function (level) {
+    var indexParams = Object.assign({}, grid, {
+      mPerLon: params.mPerLon,
+      mPerLat: params.mPerLat
+    });
     return {
       d: level.d,
-      dist: vectorDistanceToContourLevel(level, Object.assign({}, grid, {
-        mPerLon: params.mPerLon,
-        mPerLat: params.mPerLat
-      }), MAX_ZANDER_BREAK_RUN_M)
+      roughDist: distanceTransform(rasterizeContourLevel(level, grid), params.nx, params.ny, params.cellM),
+      index: buildContourSegmentIndex(level, indexParams)
     };
   });
   var edgeRaw = new Float32Array(params.nx * params.ny);
@@ -520,6 +528,9 @@ function buildZanderBreakLayer(params) {
   var deepMax = maxDepthWithin(params.depth, params.mask, params.nx, params.ny, params.cellM, 300);
   var effShift = (params.lightShiftM || 0) * (SPECIES_TRAITS.kuha.lightSens || 1);
   var traits = SPECIES_TRAITS.kuha;
+  var roughRunMarginM = Math.max(params.cellM * 2.5, 90);
+  var mPerLon = params.mPerLon || params.cellM / Math.max(params.cellLon, 1e-12);
+  var mPerLat = params.mPerLat || params.cellM / Math.max(params.cellLat, 1e-12);
   for (var idx = 0; idx < params.nx * params.ny; idx++) {
     pairLo[idx] = NaN;
     pairHi[idx] = NaN;
@@ -532,10 +543,19 @@ function buildZanderBreakLayer(params) {
     var bestLo = null;
     var bestHi = null;
     var bestGrad = 0;
+    var bestCenterSigned = NaN;
+    var x = idx % params.nx;
+    var y = Math.floor(idx / params.nx);
+    var px = (x + 0.5) * params.cellLon * mPerLon;
+    var py = (y + 0.5) * params.cellLat * mPerLat;
     for (var i = 0; i < levelData.length - 1; i++) {
       var lo = levelData[i];
       var hi = levelData[i + 1];
-      var run = lo.dist[idx] + hi.dist[idx];
+      var roughRun = lo.roughDist[idx] + hi.roughDist[idx];
+      if (!isFinite(roughRun) || roughRun > MAX_ZANDER_BREAK_RUN_M + roughRunMarginM) continue;
+      var distLo = nearestContourDistance(lo.index, px, py, MAX_ZANDER_BREAK_RUN_M);
+      var distHi = nearestContourDistance(hi.index, px, py, MAX_ZANDER_BREAK_RUN_M);
+      var run = distLo + distHi;
       var drop = hi.d - lo.d;
       if (!isFinite(run) || run < params.cellM * 0.75 || drop <= 0) continue;
       if (run > MAX_ZANDER_BREAK_RUN_M) continue;
@@ -554,12 +574,13 @@ function buildZanderBreakLayer(params) {
       bestLo = lo;
       bestHi = hi;
       bestGrad = grad;
+      bestCenterSigned = distLo - distHi;
     }
     if (!bestLo || !bestHi) continue;
     edgeRaw[idx] = bestRaw;
     pairLo[idx] = bestLo.d;
     pairHi[idx] = bestHi.d;
-    centerSigned[idx] = bestLo.dist[idx] - bestHi.dist[idx];
+    centerSigned[idx] = bestCenterSigned;
     values.push(bestRaw);
     if (bestGrad >= MIN_ZANDER_BREAK_GRAD) {
       strong[idx] = 1;

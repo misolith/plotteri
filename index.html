@@ -2879,7 +2879,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function analysisCacheKeyFromSnap(snap, sp) {
  return [
- 'analysis:v5',
+ 'analysis:v6',
  snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
  snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
  windAnalysisKey(), sp.speciesKey,
@@ -2949,6 +2949,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
  storeAnalysisResult(analysisCacheKey, res.result);
+ if (res.cached) res.result._analysisCacheHit = true;
  }
  return res.result;
  } catch (e) {
