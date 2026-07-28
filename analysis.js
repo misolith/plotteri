@@ -182,6 +182,204 @@ function pointInRings(lon, lat, rings) {
   return inside;
 }
 
+function contourLevelLines(contours, bands) {
+  var byDepth = new Map();
+  function addLine(depth, line) {
+    if (!isFinite(depth) || !line || line.length < 2) return;
+    var arr = byDepth.get(depth);
+    if (!arr) { arr = []; byDepth.set(depth, arr); }
+    arr.push(line);
+  }
+  contours.forEach(function (c) {
+    (c.lines || []).forEach(function (line) { addLine(c.d, line); });
+  });
+  if (!byDepth.has(0)) {
+    bands.forEach(function (b) {
+      if (b.lo !== 0) return;
+      (b.rings || []).forEach(function (ring) { addLine(0, ring); });
+    });
+  }
+  return Array.from(byDepth.keys()).sort(function (a, b) { return a - b; }).map(function (depth) {
+    return { d: depth, lines: byDepth.get(depth) || [] };
+  });
+}
+
+function rasterizeContourLevel(level, grid) {
+  var src = new Uint8Array(grid.nx * grid.ny);
+  function mark(gx, gy) {
+    var x = Math.round(gx - 0.5);
+    var y = Math.round(gy - 0.5);
+    if (x < 0 || y < 0 || x >= grid.nx || y >= grid.ny) return;
+    src[y * grid.nx + x] = 1;
+  }
+  level.lines.forEach(function (line) {
+    for (var i = 1; i < line.length; i++) {
+      var a = line[i - 1], b = line[i];
+      var ax = (a[0] - grid.west) / grid.cellLon;
+      var ay = (a[1] - grid.south) / grid.cellLat;
+      var bx = (b[0] - grid.west) / grid.cellLon;
+      var by = (b[1] - grid.south) / grid.cellLat;
+      var steps = Math.max(1, Math.ceil(Math.max(Math.abs(bx - ax), Math.abs(by - ay)) * 2));
+      for (var s = 0; s <= steps; s++) {
+        var t = s / steps;
+        mark(ax + (bx - ax) * t, ay + (by - ay) * t);
+      }
+    }
+  });
+  return src;
+}
+
+function dt1d(f, n) {
+  var d = new Float64Array(n);
+  var v = new Int32Array(n);
+  var z = new Float64Array(n + 1);
+  var k = 0;
+  v[0] = 0;
+  z[0] = -Infinity;
+  z[1] = Infinity;
+  for (var q = 1; q < n; q++) {
+    var s;
+    do {
+      s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+      if (s <= z[k]) k--;
+    } while (k >= 0 && s <= z[k]);
+    if (k < 0) {
+      k = 0;
+      v[0] = q;
+      z[0] = -Infinity;
+      z[1] = Infinity;
+    } else {
+      k++;
+      v[k] = q;
+      z[k] = s;
+      z[k + 1] = Infinity;
+    }
+  }
+  k = 0;
+  for (q = 0; q < n; q++) {
+    while (z[k + 1] < q) k++;
+    d[q] = (q - v[k]) * (q - v[k]) + f[v[k]];
+  }
+  return d;
+}
+
+function distanceTransform(src, nx, ny, cellM) {
+  var inf = 1e20;
+  var tmp = new Float64Array(nx * ny);
+  var row = new Float64Array(nx);
+  var col = new Float64Array(ny);
+  for (var y = 0; y < ny; y++) {
+    var any = false;
+    for (var x = 0; x < nx; x++) {
+      var i = y * nx + x;
+      row[x] = src[i] ? 0 : inf;
+      if (src[i]) any = true;
+    }
+    var dr = any ? dt1d(row, nx) : null;
+    for (x = 0; x < nx; x++) tmp[y * nx + x] = dr ? dr[x] : inf;
+  }
+  var out = new Float32Array(nx * ny);
+  for (x = 0; x < nx; x++) {
+    var anyFinite = false;
+    for (y = 0; y < ny; y++) {
+      col[y] = tmp[y * nx + x];
+      if (col[y] < inf / 2) anyFinite = true;
+    }
+    var dc = anyFinite ? dt1d(col, ny) : null;
+    for (y = 0; y < ny; y++) {
+      var v = dc ? dc[y] : inf;
+      out[y * nx + x] = v >= inf / 2 ? Infinity : Math.sqrt(v) * cellM;
+    }
+  }
+  return out;
+}
+
+function prefOverlap(dLo, dHi, preset, shift, strat) {
+  if (!isFinite(dLo) || !isFinite(dHi) || dHi <= dLo) return 0;
+  var w = [1, 4, 2, 4, 1];
+  var sum = 0, wsum = 0;
+  for (var i = 0; i < 5; i++) {
+    var z = dLo + (dHi - dLo) * i / 4;
+    sum += w[i] * depthPreference(z, preset, shift, strat);
+    wsum += w[i];
+  }
+  return wsum ? sum / wsum : 0;
+}
+
+function percentileFromValues(values, p) {
+  if (!values.length) return null;
+  values.sort(function (a, b) { return a - b; });
+  var idx = Math.max(0, Math.min(values.length - 1, Math.floor((values.length - 1) * p)));
+  return values[idx];
+}
+
+function buildZanderBreakLayer(params) {
+  var levels = contourLevelLines(params.contours, params.bands).filter(function (level) {
+    return level.lines.length && level.d >= 0;
+  });
+  if (levels.length < 2) return null;
+  var grid = {
+    nx: params.nx, ny: params.ny, west: params.west, south: params.south,
+    cellLon: params.cellLon, cellLat: params.cellLat, cellM: params.cellM
+  };
+  var levelData = levels.map(function (level) {
+    return {
+      d: level.d,
+      dist: distanceTransform(rasterizeContourLevel(level, grid), params.nx, params.ny, params.cellM)
+    };
+  });
+  var edgeRaw = new Float32Array(params.nx * params.ny);
+  var edge = new Float32Array(params.nx * params.ny);
+  var pairLo = new Float32Array(params.nx * params.ny);
+  var pairHi = new Float32Array(params.nx * params.ny);
+  var values = [];
+  var effShift = (params.lightShiftM || 0) * (SPECIES_TRAITS.kuha.lightSens || 1);
+  var traits = SPECIES_TRAITS.kuha;
+  for (var idx = 0; idx < params.nx * params.ny; idx++) {
+    pairLo[idx] = NaN;
+    pairHi[idx] = NaN;
+    if (!params.mask[idx]) continue;
+    var d = params.depth[idx];
+    if (!isFinite(d)) continue;
+    var pair = -1;
+    for (var i = 0; i < levelData.length - 1; i++) {
+      if (d >= levelData[i].d && d <= levelData[i + 1].d) { pair = i; break; }
+    }
+    if (pair < 0 && d > levelData[levelData.length - 1].d) pair = levelData.length - 2;
+    if (pair < 0) continue;
+    var lo = levelData[pair];
+    var hi = levelData[pair + 1];
+    var run = lo.dist[idx] + hi.dist[idx];
+    var drop = hi.d - lo.d;
+    if (!isFinite(run) || run < params.cellM * 0.75 || drop <= 0) continue;
+    var overlap = prefOverlap(lo.d, hi.d, traits.depth, effShift, params.strat || 0);
+    var raw = (drop / run) * overlap;
+    if (raw <= 0) continue;
+    edgeRaw[idx] = raw;
+    pairLo[idx] = lo.d;
+    pairHi[idx] = hi.d;
+    values.push(raw);
+  }
+  var p95 = percentileFromValues(values, 0.95) || 0;
+  var hasAny = false;
+  if (p95 > 0) {
+    for (idx = 0; idx < edgeRaw.length; idx++) {
+      if (!edgeRaw[idx]) continue;
+      edge[idx] = Math.min(1, edgeRaw[idx] / p95);
+      if (edge[idx] >= 0.12) hasAny = true;
+    }
+  }
+  return {
+    edge: edge,
+    raw: edgeRaw,
+    pairLo: pairLo,
+    pairHi: pairHi,
+    p95: p95,
+    levelCount: levelData.length,
+    hasAny: hasAny
+  };
+}
+
 // ---------- syvyysruudukko ja indeksi ----------
 export function buildAnalysis(input) {
   var contours = input.contours || [];
@@ -476,10 +674,27 @@ export function buildAnalysis(input) {
     if (s >= weights.minScoreToShow) hasAny = true;
   }
 
+  var zanderBreak = buildZanderBreakLayer({
+    contours: contours,
+    bands: bands,
+    nx: nx,
+    ny: ny,
+    west: west,
+    south: south,
+    cellLon: cellLon,
+    cellLat: cellLat,
+    cellM: cellM,
+    depth: depth,
+    mask: mask,
+    lightShiftM: lightShiftM,
+    strat: strat
+  });
+
   return {
     nx: nx, ny: ny, west: west, south: south, east: east, north: north,
     cellM: cellM, cellLon: cellLon, cellLat: cellLat,
     depth: depth, mask: mask, slope: slope, windExp: windExp, score: score,
+    zanderBreak: zanderBreak,
     windScale: windScale, pointCount: points.length,
     hasData: true, hasScore: hasAny
   };
