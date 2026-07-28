@@ -14,7 +14,7 @@ var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var TILE_CACHE_PREFIX = 't:v3:';
-var RESULT_CACHE_PREFIX = 'r:v6:';
+var RESULT_CACHE_PREFIX = 'r:v7:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -240,7 +240,7 @@ async function ensureTiles(keys, onProgress) {
 }
 
 async function handleBuild(msg) {
-  var cacheKey = ['analysis:v6', msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
+  var cacheKey = ['analysis:v7', msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
     msg.speciesKey, Math.round((msg.lightShiftM || 0) * 10),
     Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0),
     msg.includeZanderBreak ? 'zander' : 'base'].join('|');
