@@ -2212,12 +2212,32 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return [rgb[0], rgb[1], rgb[2], Math.round(255 * (0.35 + 0.45 * t))];
  }
 
+ function isIndexVisibleCell(a, x, y) {
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
+ var idx = y * a.nx + x;
+ return !!(a.mask[idx] && a.score[idx] >= SCORE_WEIGHTS.minScoreToShow);
+ }
+
+ function sampleIndexCoverage(a, gx, gy) {
+ var x0 = Math.floor(gx);
+ var y0 = Math.floor(gy);
+ var tx = gx - x0;
+ var ty = gy - y0;
+ var coverage = 0;
+ for (var oy = 0; oy <= 1; oy++) {
+ for (var ox = 0; ox <= 1; ox++) {
+ var x = x0 + ox;
+ var y = y0 + oy;
+ if (!isIndexVisibleCell(a, x, y)) continue;
+ var wx = ox ? tx : 1 - tx;
+ var wy = oy ? ty : 1 - ty;
+ coverage += wx * wy;
+ }
+ }
+ return Math.max(0, Math.min(1, coverage));
+ }
+
  function sampleIndexScore(a, gx, gy) {
- var cx = Math.round(gx);
- var cy = Math.round(gy);
- if (cx < 0 || cy < 0 || cx >= a.nx || cy >= a.ny) return 0;
- var centerIdx = cy * a.nx + cx;
- if (!a.mask[centerIdx] || a.score[centerIdx] < SCORE_WEIGHTS.minScoreToShow) return 0;
  var x0 = Math.floor(gx);
  var y0 = Math.floor(gy);
  var tx = gx - x0;
@@ -2228,9 +2248,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  for (var ox = 0; ox <= 1; ox++) {
  var x = x0 + ox;
  var y = y0 + oy;
- if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) continue;
+ if (!isIndexVisibleCell(a, x, y)) continue;
  var idx = y * a.nx + x;
- if (!a.mask[idx] || a.score[idx] < SCORE_WEIGHTS.minScoreToShow) continue;
  var wx = ox ? tx : 1 - tx;
  var wy = oy ? ty : 1 - ty;
  var w = wx * wy;
@@ -2253,9 +2272,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var gy = a.ny - 1 - ((py + 0.5) / scale - 0.5);
  for (var px = 0; px < canvas.width; px++) {
  var gx = (px + 0.5) / scale - 0.5;
+ var coverage = sampleIndexCoverage(a, gx, gy);
+ if (coverage < 0.18) continue;
  var score = sampleIndexScore(a, gx, gy);
  if (score < SCORE_WEIGHTS.minScoreToShow) continue;
  var col = indexColor(score, range);
+ col[3] = Math.round(col[3] * Math.min(1, coverage * 1.45));
  var pix = (py * canvas.width + px) * 4;
  img.data[pix] = col[0];
  img.data[pix + 1] = col[1];
