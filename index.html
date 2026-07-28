@@ -2720,7 +2720,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function analysisCacheKeyFromSnap(snap, sp) {
  return [
- 'analysis:v2',
+ 'analysis:v3',
  snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
  snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
  windAnalysisKey(), sp.speciesKey,

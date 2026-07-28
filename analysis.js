@@ -388,6 +388,11 @@ function maxDepthWithin(depth, mask, nx, ny, cellM, meters) {
 }
 
 function buildZanderBreakLayer(params) {
+  var MAX_ZANDER_BREAK_RUN_M = 550;
+  var MIN_ZANDER_BREAK_GRAD = 0.018;
+  var MIN_ZANDER_BREAK_OVERLAP = 0.35;
+  var MIN_ZANDER_BREAK_DROP_TERM = 0.5;
+  var MIN_ZANDER_BREAK_REFUGE = 0.15;
   var levels = contourLevelLines(params.contours, params.bands).filter(function (level) {
     return level.lines.length && level.d > 0;
   });
@@ -418,37 +423,43 @@ function buildZanderBreakLayer(params) {
     pairHi[idx] = NaN;
     centerSigned[idx] = NaN;
     if (!params.mask[idx]) continue;
-    var d = params.depth[idx];
-    if (!isFinite(d)) continue;
-    var pair = -1;
-    for (var i = 0; i < levelData.length - 1; i++) {
-      if (d >= levelData[i].d && d <= levelData[i + 1].d) { pair = i; break; }
-    }
-    if (pair < 0 && d > levelData[levelData.length - 1].d) pair = levelData.length - 2;
-    if (pair < 0) continue;
-    var lo = levelData[pair];
-    var hi = levelData[pair + 1];
-    var run = lo.dist[idx] + hi.dist[idx];
-    var drop = hi.d - lo.d;
-    if (!isFinite(run) || run < params.cellM * 0.75 || drop <= 0) continue;
-    if (run > 350) continue;
-    var overlap = prefOverlap(lo.d, hi.d, traits.depth, effShift, params.strat || 0);
-    var grad = drop / run;
-    var gate = overlap * overlap * overlap;
-    var dropTerm = Math.min(1, drop / 8);
     if (!isFinite(deepMax[idx])) continue;
     var refuge = Math.min(1, Math.max(0, (deepMax[idx] - 8) / 8));
-    var raw = grad * gate * dropTerm * refuge;
-    if (!isFinite(raw) || raw <= 0) continue;
-    edgeRaw[idx] = raw;
-    pairLo[idx] = lo.d;
-    pairHi[idx] = hi.d;
-    centerSigned[idx] = lo.dist[idx] - hi.dist[idx];
-    values.push(raw);
-    if (grad > 0.045 && overlap > 0.5 && dropTerm > 0.25 && refuge > 0.25) {
-      strong[idx] = 1;
-      strongCount++;
+    if (refuge <= 0) continue;
+    var bestRaw = 0;
+    var bestLo = null;
+    var bestHi = null;
+    for (var i = 0; i < levelData.length - 1; i++) {
+      var lo = levelData[i];
+      var hi = levelData[i + 1];
+      var run = lo.dist[idx] + hi.dist[idx];
+      var drop = hi.d - lo.d;
+      if (!isFinite(run) || run < params.cellM * 0.75 || drop <= 0) continue;
+      if (run > MAX_ZANDER_BREAK_RUN_M) continue;
+      var overlap = prefOverlap(lo.d, hi.d, traits.depth, effShift, params.strat || 0);
+      var grad = drop / run;
+      var gate = overlap * overlap * overlap;
+      var dropTerm = Math.min(1, drop / 8);
+      if (
+        grad < MIN_ZANDER_BREAK_GRAD ||
+        overlap < MIN_ZANDER_BREAK_OVERLAP ||
+        dropTerm < MIN_ZANDER_BREAK_DROP_TERM ||
+        refuge < MIN_ZANDER_BREAK_REFUGE
+      ) continue;
+      var raw = grad * gate * dropTerm * refuge;
+      if (!isFinite(raw) || raw <= bestRaw) continue;
+      bestRaw = raw;
+      bestLo = lo;
+      bestHi = hi;
     }
+    if (!bestLo || !bestHi) continue;
+    edgeRaw[idx] = bestRaw;
+    pairLo[idx] = bestLo.d;
+    pairHi[idx] = bestHi.d;
+    centerSigned[idx] = bestLo.dist[idx] - bestHi.dist[idx];
+    values.push(bestRaw);
+    strong[idx] = 1;
+    strongCount++;
   }
   var p50 = percentileFromValues(values.slice(), 0.50) || 0;
   var p95 = percentileFromValues(values, 0.95) || 0;
