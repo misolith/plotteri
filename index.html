@@ -2331,6 +2331,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return Math.sqrt(dx * dx + dy * dy);
  }
 
+ function latLngDistanceM(aPt, bPt) {
+ var lat0 = (aPt[0] + bPt[0]) / 2 * Math.PI / 180;
+ var dx = (bPt[1] - aPt[1]) * 111320 * Math.cos(lat0);
+ var dy = (bPt[0] - aPt[0]) * 110540;
+ return Math.sqrt(dx * dx + dy * dy);
+ }
+
  function douglasPeuckerLatLngs(points, toleranceM) {
  if (!points || points.length <= 2) return points || [];
  var keep = new Uint8Array(points.length);
@@ -2358,6 +2365,81 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (keep[i]) out.push(points[i]);
  }
  return out;
+ }
+
+ function zanderBreakLineLengthM(latlngs) {
+ var len = 0;
+ for (var i = 1; i < latlngs.length; i++) len += latLngDistanceM(latlngs[i - 1], latlngs[i]);
+ return len;
+ }
+
+ function maxTurnAngleDeg(latlngs) {
+ var maxTurn = 0;
+ for (var i = 1; i < latlngs.length - 1; i++) {
+ var aPt = latlngs[i - 1], bPt = latlngs[i], cPt = latlngs[i + 1];
+ var lat0 = bPt[0] * Math.PI / 180;
+ var ax = (aPt[1] - bPt[1]) * 111320 * Math.cos(lat0);
+ var ay = (aPt[0] - bPt[0]) * 110540;
+ var cx = (cPt[1] - bPt[1]) * 111320 * Math.cos(lat0);
+ var cy = (cPt[0] - bPt[0]) * 110540;
+ var al = Math.sqrt(ax * ax + ay * ay);
+ var cl = Math.sqrt(cx * cx + cy * cy);
+ if (al <= 0 || cl <= 0) continue;
+ var cos = Math.max(-1, Math.min(1, (ax * cx + ay * cy) / (al * cl)));
+ var turn = 180 - Math.acos(cos) * 180 / Math.PI;
+ if (turn > maxTurn) maxTurn = turn;
+ }
+ return maxTurn;
+ }
+
+ function zanderBreakPointKey(p) {
+ return Math.round(p.px * 10000) + ':' + Math.round(p.py * 10000);
+ }
+
+ function zanderBreakCorner(a, x, y) {
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return null;
+ var idx = y * a.nx + x;
+ var s = zanderBreakCenterSigned(a, x, y);
+ if (!isFinite(s)) return null;
+ return {
+ x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5,
+ s: s, strong: zanderBreakStrongAt(a, x, y), score: zanderBreakCellScore(a, x, y)
+ };
+ }
+
+ function zanderBreakEdgeCrossing(a, c0, c1) {
+ if (!c0 || !c1) return null;
+ if ((!c0.strong && !c1.strong) || !zanderBreakPairMatches(a, c0.idx, c1.idx)) return null;
+ if (!(c0.s === 0 || c1.s === 0 || c0.s * c1.s < 0)) return null;
+ var t = c0.s === c1.s ? 0.5 : c0.s / (c0.s - c1.s);
+ if (!isFinite(t)) t = 0.5;
+ t = Math.max(0, Math.min(1, t));
+ return {
+ px: c0.px + (c1.px - c0.px) * t,
+ py: c0.py + (c1.py - c0.py) * t,
+ score: Math.max(c0.score, c1.score),
+ strong: c0.strong || c1.strong
+ };
+ }
+
+ function zanderBreakSegmentLatLng(a, p) {
+ return [
+ a.south + p.py * a.cellLat,
+ a.west + p.px * a.cellLon
+ ];
+ }
+
+ function zanderBreakTurnCost(prevPoint, currentPoint, nextPoint) {
+ if (!prevPoint || !currentPoint || !nextPoint) return 0;
+ var vx = currentPoint.px - prevPoint.px;
+ var vy = currentPoint.py - prevPoint.py;
+ var wx = nextPoint.px - currentPoint.px;
+ var wy = nextPoint.py - currentPoint.py;
+ var vl = Math.sqrt(vx * vx + vy * vy);
+ var wl = Math.sqrt(wx * wx + wy * wy);
+ if (vl <= 0 || wl <= 0) return 0;
+ var cos = Math.max(-1, Math.min(1, (vx * wx + vy * wy) / (vl * wl)));
+ return Math.acos(cos) * 180 / Math.PI;
  }
 
  function zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy) {
@@ -2419,50 +2501,126 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function buildZanderBreakPolylines(a) {
  if (!a || !a.zanderBreak || !a.zanderBreak.hasAny) return [];
- var ridgeMask = new Uint8Array(a.nx * a.ny);
-  for (var y = 0; y < a.ny; y++) {
- for (var x = 0; x < a.nx; x++) {
- if (zanderBreakCenterCrossing(a, x, y)) ridgeMask[y * a.nx + x] = 1;
+ var segments = [];
+ function addSegment(p0, p1) {
+ if (!p0 || !p1) return;
+ var k0 = zanderBreakPointKey(p0);
+ var k1 = zanderBreakPointKey(p1);
+ if (k0 === k1) return;
+ segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0) });
+ }
+ for (var y = 0; y < a.ny - 1; y++) {
+ for (var x = 0; x < a.nx - 1; x++) {
+ var c0 = zanderBreakCorner(a, x, y);
+ var c1 = zanderBreakCorner(a, x + 1, y);
+ var c2 = zanderBreakCorner(a, x + 1, y + 1);
+ var c3 = zanderBreakCorner(a, x, y + 1);
+ var top = zanderBreakEdgeCrossing(a, c0, c1);
+ var right = zanderBreakEdgeCrossing(a, c1, c2);
+ var bottom = zanderBreakEdgeCrossing(a, c3, c2);
+ var left = zanderBreakEdgeCrossing(a, c0, c3);
+ var edges = [
+ { name: 'top', p: top },
+ { name: 'right', p: right },
+ { name: 'bottom', p: bottom },
+ { name: 'left', p: left }
+ ].filter(function (edge) { return !!edge.p; });
+ if (edges.length === 2) {
+ addSegment(edges[0].p, edges[1].p);
+ } else if (edges.length === 4) {
+ var center = (c0.s + c1.s + c2.s + c3.s) / 4;
+ if (center >= 0) {
+ addSegment(top, right);
+ addSegment(bottom, left);
+ } else {
+ addSegment(top, left);
+ addSegment(right, bottom);
  }
  }
- var visited = new Uint8Array(ridgeMask.length);
+ }
+ }
+ if (!segments.length) return [];
+ var adjacency = new Map();
+ function addAdj(key, segIdx) {
+ var arr = adjacency.get(key);
+ if (!arr) { arr = []; adjacency.set(key, arr); }
+ arr.push(segIdx);
+ }
+ for (var si = 0; si < segments.length; si++) {
+ addAdj(segments[si].ak, si);
+ addAdj(segments[si].bk, si);
+ }
+ var used = new Uint8Array(segments.length);
  var lines = [];
  var minLenM = 150;
- for (y = 0; y < a.ny; y++) {
- for (x = 0; x < a.nx; x++) {
- var startIdx = y * a.nx + x;
- if (!ridgeMask[startIdx] || visited[startIdx]) continue;
- var queue = [zanderBreakCenterCrossing(a, x, y) || { x: x, y: y, idx: startIdx, score: zanderBreakCellScore(a, x, y) }];
- var component = [];
- visited[startIdx] = 1;
- for (var qi = 0; qi < queue.length; qi++) {
- var cell = queue[qi];
- component.push(cell);
- for (var oy = -1; oy <= 1; oy++) {
- for (var ox = -1; ox <= 1; ox++) {
- if (!ox && !oy) continue;
- var nx = cell.x + ox, ny = cell.y + oy;
- if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) continue;
- var nIdx = ny * a.nx + nx;
- if (visited[nIdx] || !zanderBreakCanStep(a, ridgeMask, cell, nx, ny, ox, oy)) continue;
- visited[nIdx] = 1;
- queue.push(zanderBreakCenterCrossing(a, nx, ny) || { x: nx, y: ny, idx: nIdx, score: zanderBreakCellScore(a, nx, ny) });
+ function segmentOther(seg, key) {
+ return seg.ak === key ? { key: seg.bk, point: seg.b } : { key: seg.ak, point: seg.a };
+ }
+ function chooseNext(key, prevPoint, currentPoint) {
+ var arr = adjacency.get(key) || [];
+ var bestIdx = -1;
+ var bestTurn = Infinity;
+ for (var i = 0; i < arr.length; i++) {
+ var idx = arr[i];
+ if (used[idx]) continue;
+ var other = segmentOther(segments[idx], key);
+ var turn = zanderBreakTurnCost(prevPoint, currentPoint, other.point);
+ if (turn < bestTurn) {
+ bestTurn = turn;
+ bestIdx = idx;
  }
  }
+ if (bestTurn > 80) return -1;
+ return bestIdx;
  }
- if (component.length * a.cellM < minLenM) continue;
- var ordered = zanderBreakTraceComponent(a, component, ridgeMask);
- if (ordered.length * a.cellM < minLenM) continue;
- var maxScore = 0;
- var latlngs = ordered.map(function (cell) {
- maxScore = Math.max(maxScore, cell.score);
- return zanderBreakLatLng(a, cell);
- });
+ function traceFrom(segIdx, startKey) {
+ var seg = segments[segIdx];
+ var startPoint = seg.ak === startKey ? seg.a : seg.b;
+ var other = segmentOther(seg, startKey);
+ var points = [startPoint, other.point];
+ var score = seg.score;
+ used[segIdx] = 1;
+ var prevPoint = startPoint;
+ var currentPoint = other.point;
+ var currentKey = other.key;
+ while (true) {
+ var nextIdx = chooseNext(currentKey, prevPoint, currentPoint);
+ if (nextIdx < 0) break;
+ var next = segmentOther(segments[nextIdx], currentKey);
+ used[nextIdx] = 1;
+ points.push(next.point);
+ score = Math.max(score, segments[nextIdx].score);
+ prevPoint = currentPoint;
+ currentPoint = next.point;
+ currentKey = next.key;
+ if (currentKey === startKey) break;
+ }
+ return { points: points, score: score };
+ }
+ var order = [];
+ for (si = 0; si < segments.length; si++) {
+ var degA = (adjacency.get(segments[si].ak) || []).length;
+ var degB = (adjacency.get(segments[si].bk) || []).length;
+ order.push({ idx: si, endpoint: degA <= 1 ? segments[si].ak : degB <= 1 ? segments[si].bk : segments[si].ak, open: degA <= 1 || degB <= 1 });
+ }
+ order.sort(function (aOrd, bOrd) { return (aOrd.open === bOrd.open ? 0 : aOrd.open ? -1 : 1); });
+ for (var oi = 0; oi < order.length; oi++) {
+ var start = order[oi];
+ if (used[start.idx]) continue;
+ var traced = traceFrom(start.idx, start.endpoint);
+ var latlngs = traced.points.map(function (p) { return zanderBreakSegmentLatLng(a, p); });
  latlngs = douglasPeuckerLatLngs(latlngs, a.cellM * 0.6);
- if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: maxScore, cells: ordered.length });
- }
+ var lenM = zanderBreakLineLengthM(latlngs);
+ if (lenM < minLenM) continue;
+ var maxTurn = maxTurnAngleDeg(latlngs);
+ if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, segments: traced.points.length - 1 });
  }
  lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
+ if (lines.length && typeof console !== 'undefined' && console.debug) {
+ console.debug('Kuha käyräväli viivat', lines.map(function (line) {
+ return { segments: line.segments, lenM: Math.round(line.lenM), maxTurnDeg: Math.round(line.maxTurnDeg), score: Number(line.score.toFixed(3)) };
+ }));
+ }
  return lines;
  }
 
@@ -2721,7 +2879,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  function analysisCacheKeyFromSnap(snap, sp) {
  return [
- 'analysis:v4',
+ 'analysis:v5',
  snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
  snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
  windAnalysisKey(), sp.speciesKey,
