@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-partial-tile-render-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-cache-measure-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -11,22 +11,24 @@ var PARTIAL_TILE_TTL_MS = 24 * 3600 * 1000;
 var FAILED_TILE_TTL_MS = 30 * 1000;
 var MEM_MAX = 60;
 var MAX_TILES = 35;
-var CACHE_MAX_BYTES = 12 * 1024 * 1024;
-var CACHE_MAX_ENTRIES = 150;
+var TILE_CACHE_MAX_BYTES = 80 * 1024 * 1024;
+var TILE_CACHE_MAX_ENTRIES = 220;
+var RESULT_CACHE_MAX_BYTES = 24 * 1024 * 1024;
+var RESULT_CACHE_MAX_ENTRIES = 8;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var DEPTH_FETCH_TIMEOUT_MS = 12000;
 var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
 var DEPTH_TILES_SOFT_DEADLINE_MS = 2500;
 var IDB_READ_TIMEOUT_MS = 2500;
-var TILE_CACHE_PREFIX = 't:v3:';
+var TILE_CACHE_PREFIX = 't:v4:';
 var RESULT_CACHE_PREFIX = 'r:v7:';
 
 var memTiles = new Map();
 var fetching = new Map();
 var resultCache = new Map();
 var dbPromise = null;
-var lastTrimAt = 0;
+var lastTrimAt = {};
 
 function addStatsEvent(stats, event, data) {
   if (!stats) return;
@@ -94,7 +96,7 @@ async function idbDelete(keys) {
   });
 }
 
-async function idbMeta() {
+async function idbMeta(prefix) {
   var db = await openDb();
   return await new Promise(function (resolve, reject) {
     var out = [];
@@ -102,7 +104,10 @@ async function idbMeta() {
     req.onsuccess = function () {
       var cur = req.result;
       if (!cur) return resolve(out);
-      out.push({ key: cur.value.key, updated: cur.value.updated || 0, size: cur.value.size || 0 });
+      var key = cur.value && cur.value.key;
+      if (!prefix || (typeof key === 'string' && key.indexOf(prefix) === 0)) {
+        out.push({ key: key, updated: cur.value.updated || 0, size: cur.value.size || 0 });
+      }
       cur.continue();
     };
     req.onerror = function () { reject(req.error); };
@@ -155,18 +160,18 @@ function tileCacheable(tile) {
   return !!(tile && !tile.failed);
 }
 
-async function trimCache() {
-  if (Date.now() - lastTrimAt < 60000) return;
-  lastTrimAt = Date.now();
+async function trimCache(prefix, maxEntries, maxBytes, ttlMs) {
+  var now = Date.now();
+  if (now - (lastTrimAt[prefix] || 0) < 60000) return;
+  lastTrimAt[prefix] = now;
   try {
-    var meta = await idbMeta();
-    var now = Date.now();
-    var expired = meta.filter(function (m) { return now - m.updated > TILE_TTL_MS; });
-    var live = meta.filter(function (m) { return now - m.updated <= TILE_TTL_MS; });
+    var meta = await idbMeta(prefix);
+    var expired = meta.filter(function (m) { return now - m.updated > ttlMs; });
+    var live = meta.filter(function (m) { return now - m.updated <= ttlMs; });
     live.sort(function (a, b) { return a.updated - b.updated; });
     var bytes = live.reduce(function (sum, m) { return sum + m.size; }, 0);
     var remove = expired.slice();
-    while (live.length > CACHE_MAX_ENTRIES || bytes > CACHE_MAX_BYTES) {
+    while (live.length > maxEntries || bytes > maxBytes) {
       var oldest = live.shift();
       if (!oldest) break;
       bytes -= oldest.size;
@@ -328,7 +333,22 @@ async function getTile(key, stats, opts) {
     } else {
       try {
         if (onStage) onStage('tile:disk-read', { key: key });
+        var diskStarted = Date.now();
         var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
+        var diskDone = {
+          key: key,
+          ms: Date.now() - diskStarted,
+          hit: cached && cached.value ? 1 : 0,
+          contours: cached && cached.value ? (cached.value.c || []).length : -1,
+          bands: cached && cached.value ? (cached.value.b || []).length : -1,
+          soundings: cached && cached.value ? (cached.value.s || []).length : -1,
+          sources: cached && cached.value && cached.value.sources ? cached.value.sources.join('+') : '',
+          partial: cached && cached.value && cached.value.partial ? 1 : 0,
+          failed: cached && cached.value && cached.value.failed ? 1 : 0,
+          bytes: cached ? cached.size || 0 : 0
+        };
+        addStatsEvent(stats, 'tile:disk-done', diskDone);
+        if (onStage) onStage('tile:disk-done', diskDone);
         if (cached && cached.value && Date.now() - cached.value.t < tileTtlMs(cached.value)) {
           putMem(key, cached.value);
           if (stats) stats.disk++;
@@ -353,7 +373,9 @@ async function getTile(key, stats, opts) {
     if (tileCacheable(tile)) {
       var size = 0;
       try { size = JSON.stringify(tile).length; } catch (e) { size = 100000; }
-      idbPut({ key: TILE_CACHE_PREFIX + key, value: tile, updated: Date.now(), size: size }).then(trimCache).catch(function () {});
+      idbPut({ key: TILE_CACHE_PREFIX + key, value: tile, updated: Date.now(), size: size })
+        .then(function () { return trimCache(TILE_CACHE_PREFIX, TILE_CACHE_MAX_ENTRIES, TILE_CACHE_MAX_BYTES, TILE_TTL_MS); })
+        .catch(function () {});
     }
     return tile;
   })();
@@ -560,7 +582,7 @@ async function handleBuild(msg) {
         updated: rec.t,
         size: JSON.stringify({ sources: sources, nx: result && result.nx, ny: result && result.ny }).length +
           ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
-      }).then(trimCache).catch(function () {});
+      }).then(function () { return trimCache(RESULT_CACHE_PREFIX, RESULT_CACHE_MAX_ENTRIES, RESULT_CACHE_MAX_BYTES, RESULT_TTL_MS); }).catch(function () {});
     } catch (e) { /* persistent analysis cache write is best effort */ }
   } else {
     addStatsEvent(stats, 'analysis:partial-result-not-cached', {
@@ -585,12 +607,12 @@ async function handleBuild(msg) {
 }
 
 async function handleStatus() {
-  var meta = await idbMeta();
+  var meta = await idbMeta(TILE_CACHE_PREFIX);
   return {
     count: meta.length,
     bytes: meta.reduce(function (sum, m) { return sum + m.size; }, 0),
-    maxEntries: CACHE_MAX_ENTRIES,
-    maxBytes: CACHE_MAX_BYTES
+    maxEntries: TILE_CACHE_MAX_ENTRIES,
+    maxBytes: TILE_CACHE_MAX_BYTES
   };
 }
 
