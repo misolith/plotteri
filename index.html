@@ -187,7 +187,7 @@
  }
  .settings-details[open] summary::after { content: "-"; }
  .settings-details-body { padding: 0 0 12px; }
- .cache-actions { display: flex; gap: 8px; margin-top: 10px; }
+ .cache-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
  #place-results { list-style: none; margin: 10px 0 0; padding: 0; }
  .place-result {
  width: 100%; text-align: left; display: block; background: transparent; color: #d8e6ea;
@@ -457,9 +457,11 @@
  </div>
  <div class="cache-actions">
  <button id="btn-3d">3D-syvyysnäkymä</button>
+ <button id="analysis-log-copy">Kopioi analyysiloki</button>
  <button id="depth-cache-clear">Tyhjennä syvyyscache</button>
  </div>
  <p id="depth-status" class="hint">Lähennä järvelle (zoom 12+), niin indeksi lasketaan.</p>
+ <p id="analysis-log-status" class="hint">Loki täydentyy, kun analyysi ajetaan.</p>
  <label class="settings-row">
  <span>Debug-status kartalle</span>
  <input id="debug-toggle" type="checkbox">
@@ -918,6 +920,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var indexToggle = document.getElementById('index-toggle');
  var speciesSelect = document.getElementById('species-select');
  var btn3d = document.getElementById('btn-3d');
+ var analysisLogCopy = document.getElementById('analysis-log-copy');
+ var analysisLogStatus = document.getElementById('analysis-log-status');
  var depthCacheClear = document.getElementById('depth-cache-clear');
  var depthStatus = document.getElementById('depth-status');
  var debugToggle = document.getElementById('debug-toggle');
@@ -1974,6 +1978,120 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return String(text).replace(/\s+/g, ' ').trim();
  }
 
+ var ANALYSIS_LOG_MAX = 160;
+ var analysisDebugLog = [];
+ var analysisRunSeq = 0;
+ var activeAnalysisRun = null;
+
+ function analysisNowMs() {
+ return window.performance && performance.now ? performance.now() : Date.now();
+ }
+
+ function analysisIsoTime(ts) {
+ try { return new Date(ts).toISOString(); } catch (e) { return String(ts); }
+ }
+
+ function trimAnalysisLog() {
+ if (analysisDebugLog.length > ANALYSIS_LOG_MAX) {
+ analysisDebugLog = analysisDebugLog.slice(analysisDebugLog.length - ANALYSIS_LOG_MAX);
+ }
+ if (analysisLogStatus) {
+ analysisLogStatus.textContent = analysisDebugLog.length
+ ? 'Analyysilokissa ' + analysisDebugLog.length + ' riviä valmiina kopioitavaksi.'
+ : 'Loki täydentyy, kun analyysi ajetaan.';
+ }
+ }
+
+ function pushAnalysisLog(type, data) {
+ var runId = activeAnalysisRun ? activeAnalysisRun.id : null;
+ var t0 = activeAnalysisRun ? activeAnalysisRun.t0 : null;
+ var entry = Object.assign({
+ ts: Date.now(),
+ run: runId,
+ type: type,
+ elapsedMs: t0 == null ? null : Math.round(analysisNowMs() - t0)
+ }, data || {});
+ analysisDebugLog.push(entry);
+ trimAnalysisLog();
+ }
+
+ function beginAnalysisLogRun(meta) {
+ activeAnalysisRun = {
+ id: ++analysisRunSeq,
+ t0: analysisNowMs(),
+ started: Date.now()
+ };
+ if (!meta || meta.mode === 'new-analysis' || meta.mode === 'toowide') analysisDebugLog = [];
+ pushAnalysisLog('run:start', meta);
+ }
+
+ function finishAnalysisLogRun(type, data, expectedRunId) {
+ if (expectedRunId != null && activeAnalysisRun && activeAnalysisRun.id !== expectedRunId) {
+ analysisDebugLog.push(Object.assign({
+ ts: Date.now(),
+ run: expectedRunId,
+ type: type,
+ elapsedMs: null
+ }, data || {}));
+ trimAnalysisLog();
+ return;
+ }
+ pushAnalysisLog(type, data);
+ activeAnalysisRun = null;
+ }
+
+ function formatAnalysisLogValue(value) {
+ if (value == null) return '';
+ if (Array.isArray(value)) return value.join(',');
+ if (typeof value === 'object') {
+ try { return JSON.stringify(value); } catch (e) { return String(value); }
+ }
+ return String(value);
+ }
+
+ function formatAnalysisDebugLog() {
+ var lines = [];
+ lines.push('Plotteri analyysiloki');
+ lines.push('kopioitu: ' + analysisIsoTime(Date.now()));
+ lines.push('url: ' + location.href);
+ lines.push('zoom: ' + map.getZoom());
+ lines.push('center: ' + map.getCenter().lat.toFixed(5) + ',' + map.getCenter().lng.toFixed(5));
+ lines.push('species: ' + currentSpeciesKey());
+ lines.push('wind: ' + formatAnalysisLogValue(effectiveAnalysisWind()));
+ lines.push('status: ' + debugShortStatus(depthStatusText));
+ lines.push('');
+ if (!analysisDebugLog.length) {
+ lines.push('Ei analyysilokia vielä tässä istunnossa.');
+ return lines.join('\n');
+ }
+ analysisDebugLog.forEach(function (entry) {
+ var fields = [];
+ fields.push(analysisIsoTime(entry.ts));
+ if (entry.run != null) fields.push('run=' + entry.run);
+ if (entry.elapsedMs != null) fields.push('+' + entry.elapsedMs + 'ms');
+ fields.push(entry.type);
+ Object.keys(entry).forEach(function (key) {
+ if (key === 'ts' || key === 'run' || key === 'elapsedMs' || key === 'type') return;
+ fields.push(key + '=' + formatAnalysisLogValue(entry[key]));
+ });
+ lines.push(fields.join(' | '));
+ });
+ return lines.join('\n');
+ }
+
+ async function copyAnalysisDebugLog() {
+ var text = formatAnalysisDebugLog();
+ try {
+ if (!navigator.clipboard || !navigator.clipboard.writeText) throw new Error('clipboard unavailable');
+ await navigator.clipboard.writeText(text);
+ if (analysisLogStatus) analysisLogStatus.textContent = 'Analyysiloki kopioitu leikepöydälle (' + analysisDebugLog.length + ' riviä).';
+ showToast('Analyysiloki kopioitu');
+ } catch (e) {
+ if (analysisLogStatus) analysisLogStatus.textContent = 'Kopiointi epäonnistui: ' + String(e && e.message || e);
+ showToast('Kopiointi epäonnistui');
+ }
+ }
+
  function updateDebugOverlay() {
  if (!debugOverlay) return;
  if (!settings || !settings.debugOverlayVisible) {
@@ -2078,12 +2196,19 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function getDepthTile(key) {
  var mem = depthTilesMem.get(key);
- if (mem && Date.now() - mem.t < DEPTH_TILE_TTL_MS) return mem;
- if (depthFetching.has(key)) return depthFetching.get(key);
+ if (mem && Date.now() - mem.t < DEPTH_TILE_TTL_MS) {
+ pushAnalysisLog('tile:mem', { key: key });
+ return mem;
+ }
+ if (depthFetching.has(key)) {
+ pushAnalysisLog('tile:wait', { key: key });
+ return depthFetching.get(key);
+ }
  var promise = (async function () {
  var cached = await loadJSON(DEPTH_KEY_PREFIX + key, null);
  if (cached && cached.t && Date.now() - cached.t < DEPTH_TILE_TTL_MS) {
  putDepthMem(key, cached);
+ pushAnalysisLog('tile:disk', { key: key });
  return cached;
  }
  var parts = key.split(':');
@@ -2098,6 +2223,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  };
  var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
  try {
+ var sykeStart = analysisNowMs();
  var sykeResponses = await Promise.all([
  fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
  fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
@@ -2106,11 +2232,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
  tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
  if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
+ pushAnalysisLog('tile:syke', { key: key, ms: Math.round(analysisNowMs() - sykeStart), c: tile.c.length, b: tile.b.length });
  } catch (e) {
+ pushAnalysisLog('tile:syke-error', { key: key, error: String(e && e.message || e) });
  console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
  }
  var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
  try {
+ var traficomStart = analysisNowMs();
  var traficomResponses = await Promise.all([
  fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
  fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
@@ -2124,7 +2253,15 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
  tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
  if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
+ pushAnalysisLog('tile:traficom', {
+ key: key,
+ ms: Math.round(analysisNowMs() - traficomStart),
+ c: tile.c.length - c0,
+ b: tile.b.length - b0,
+ s: tile.s.length - s0
+ });
  } catch (e) {
+ pushAnalysisLog('tile:traficom-error', { key: key, error: String(e && e.message || e) });
  console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
  }
  putDepthMem(key, tile);
@@ -3011,13 +3148,30 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
  var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
  var analysisCacheKey = analysisCacheKeyFromSnap(snap, sp);
+ pushAnalysisLog('build:snap', {
+ west: snap.west.toFixed(5),
+ south: snap.south.toFixed(5),
+ east: snap.east.toFixed(5),
+ north: snap.north.toFixed(5),
+ cellM: snap.cellM,
+ species: sp.speciesKey,
+ windKey: windAnalysisKey(),
+ zander: map.hasLayer(zanderBreakLayer) ? 1 : 0
+ });
  var cachedAnalysis = loadCachedAnalysisResult(analysisCacheKey);
  if (cachedAnalysis) {
  depthTileProgress = null;
+ pushAnalysisLog('cache:memory-hit', {
+ grid: cachedAnalysis.nx + 'x' + cachedAnalysis.ny,
+ points: cachedAnalysis.pointCount || 0,
+ hasData: cachedAnalysis.hasData ? 1 : 0
+ });
  return cachedAnalysis;
  }
  if (!analysisWorkerBroken) {
  try {
+ var workerStart = analysisNowMs();
+ pushAnalysisLog('worker:request', { pending: analysisWorkerPending.size + 1 });
  var res = await workerRequest(Object.assign({
  type: 'build',
  west: snap.west, south: snap.south, east: snap.east, north: snap.north,
@@ -3025,6 +3179,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  wind: effectiveAnalysisWind(), windKey: windAnalysisKey(),
  includeZanderBreak: map.hasLayer(zanderBreakLayer)
  }, sp), function (p) {
+ if (p.event) pushAnalysisLog('worker:' + p.event, p);
  depthTileProgress = {
  done: p.done || 0,
  total: p.total || 0,
@@ -3039,25 +3194,44 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setDepthStatus('Syvyystiilet ' + p.done + '/' + p.total + ' (' + source + ')…');
  }
  });
+ pushAnalysisLog('worker:response', {
+ msWorker: Math.round(analysisNowMs() - workerStart),
+ cached: res.cached ? 1 : 0,
+ reason: res.reason || '',
+ sources: res.sources || [],
+ events: res.debug && res.debug.events ? res.debug.events.length : 0,
+ errors: res.debug && res.debug.errors ? res.debug.errors.length : 0
+ });
+ if (res.debug && res.debug.events) {
+ res.debug.events.slice(-24).forEach(function (ev) { pushAnalysisLog('worker:' + ev.event, ev); });
+ }
  if (res.reason === 'toowide') return null;
  if (res.result) {
  depthTileProgress = null;
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
+ res.result._analysisDebug = res.debug || null;
  storeAnalysisResult(analysisCacheKey, res.result);
  if (res.cached) res.result._analysisCacheHit = true;
  }
  return res.result;
  } catch (e) {
  if (e && e.message === 'worker canceled') return null;
+ pushAnalysisLog('worker:error', { error: String(e && e.message || e) });
  console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
  }
  }
  // fallback: koko putki karttasaikeessa jos worker ei kaynnisty
+ var fallbackStart = analysisNowMs();
+ pushAnalysisLog('fallback:start', { workerBroken: analysisWorkerBroken ? 1 : 0 });
  var snapBounds = L.latLngBounds([snap.south, snap.west], [snap.north, snap.east]);
  var keys = depthTileKeysForBounds(snapBounds);
- if (keys.length > DEPTH_MAX_TILES_PER_VIEW) return null;
+ if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
+ pushAnalysisLog('fallback:toowide', { tiles: keys.length });
+ return null;
+ }
  var tiles = await ensureDepthTiles(keys);
+ pushAnalysisLog('fallback:tiles', { tiles: keys.length, msTiles: Math.round(analysisNowMs() - fallbackStart) });
  var contourById = new Map();
  var bandById = new Map();
  var soundingById = new Map();
@@ -3066,6 +3240,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  (tile.b || []).forEach(function (b) { bandById.set(b.id, b); });
  (tile.s || []).forEach(function (s) { soundingById.set(s.id, s); });
  });
+ var computeStart = analysisNowMs();
  var a = buildAnalysis({
  contours: Array.from(contourById.values()),
  bands: Array.from(bandById.values()),
@@ -3082,6 +3257,13 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  cellLonDeg: snap.cellLon,
  cellLatDeg: snap.cellLat,
  includeZanderBreak: map.hasLayer(zanderBreakLayer)
+ });
+ pushAnalysisLog('fallback:computed', {
+ msCompute: Math.round(analysisNowMs() - computeStart),
+ msTotal: Math.round(analysisNowMs() - fallbackStart),
+ grid: a ? a.nx + 'x' + a.ny : '',
+ points: a ? a.pointCount || 0 : 0,
+ hasData: a && a.hasData ? 1 : 0
  });
  if (a) {
  a.reqCellM = snap.cellM;
@@ -3214,24 +3396,62 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
  lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
+ beginAnalysisLogRun({
+ mode: 'reuse-visible-analysis',
+ zoom: map.getZoom(),
+ cellM: analysisCellM(),
+ species: currentSpeciesKey()
+ });
+ var reuseLogRunId = activeAnalysisRun ? activeAnalysisRun.id : null;
+ var reuseRenderStart = analysisNowMs();
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(lastAnalysis); else clearIndexOverlay();
+ var reuseIndexMs = Math.round(analysisNowMs() - reuseRenderStart);
+ var reuseBreakStart = analysisNowMs();
  if (map.hasLayer(zanderBreakLayer)) drawZanderBreakOverlay(lastAnalysis); else clearZanderBreakOverlay();
+ var reuseBreakMs = Math.round(analysisNowMs() - reuseBreakStart);
  setCompletedAnalysisStatus(lastAnalysis);
  updateMapDepthHud();
+ finishAnalysisLogRun('run:finish', {
+ mode: 'reuse-visible-analysis',
+ hasData: lastAnalysis.hasData ? 1 : 0,
+ grid: lastAnalysis.nx + 'x' + lastAnalysis.ny,
+ renderIndexMs: reuseIndexMs,
+ renderBreakMs: reuseBreakMs
+ }, reuseLogRunId);
  return lastAnalysis.hasData ? lastAnalysis : null;
  }
  var bounds = map.getBounds().pad(0.2);
  var keys = depthTileKeysForBounds(bounds);
  if (keys.length > DEPTH_MAX_TILES_PER_VIEW) {
+ beginAnalysisLogRun({
+ mode: 'toowide',
+ zoom: map.getZoom(),
+ cellM: analysisCellM(),
+ tiles: keys.length
+ });
+ var tooWideLogRunId = activeAnalysisRun ? activeAnalysisRun.id : null;
  setDepthStatus('Näkymä liian laaja uuteen syvyysanalyysiin, nykyiset käyrät pidetään kartalla.');
  updateMapDepthHud();
+ finishAnalysisLogRun('run:finish', { reason: 'toowide', tiles: keys.length }, tooWideLogRunId);
  return null;
  }
  var seq = ++depthBuildSeq;
  cancelPendingAnalysisWorker();
+ beginAnalysisLogRun({
+ mode: 'new-analysis',
+ zoom: map.getZoom(),
+ cellM: analysisCellM(),
+ tiles: keys.length,
+ species: currentSpeciesKey(),
+ workerBroken: analysisWorkerBroken ? 1 : 0
+ });
+ var newLogRunId = activeAnalysisRun ? activeAnalysisRun.id : null;
  setDepthStatus('Haetaan syvyysdataa (' + keys.length + ' tiiltä)… nykyinen overlay pysyy näkyvissä.');
  var a = await buildAnalysisForBounds(bounds);
- if (seq !== depthBuildSeq) return null;
+ if (seq !== depthBuildSeq) {
+ finishAnalysisLogRun('run:stale', { seq: seq, currentSeq: depthBuildSeq }, newLogRunId);
+ return null;
+ }
  lastAnalysis = a;
  lastAnalysisParamsKey = analysisParamsKey();
  if (!a || !a.hasData) {
@@ -3241,13 +3461,28 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setDepthStatus('Ei syvyysdataa tässä näkymässä (SYKE järville, Traficom merelle sekä Vuoksen ja Kymijoen vesistöihin).');
  updateMapDepthHud();
  if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
+ finishAnalysisLogRun('run:finish', { hasData: 0, reason: a ? 'empty-analysis' : 'null-analysis' }, newLogRunId);
  return null;
  }
+ var indexRenderStart = analysisNowMs();
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(a); else clearIndexOverlay();
+ var indexRenderMs = Math.round(analysisNowMs() - indexRenderStart);
+ var breakRenderStart = analysisNowMs();
  if (map.hasLayer(zanderBreakLayer)) drawZanderBreakOverlay(a); else clearZanderBreakOverlay();
+ var breakRenderMs = Math.round(analysisNowMs() - breakRenderStart);
  setTraficomAttribution((a.sources || []).indexOf('Traficom') !== -1);
  setCompletedAnalysisStatus(a);
  updateMapDepthHud();
+ finishAnalysisLogRun('run:finish', {
+ hasData: 1,
+ grid: a.nx + 'x' + a.ny,
+ points: a.pointCount || 0,
+ sources: a.sources || [],
+ cache: a._analysisCacheHit ? 1 : 0,
+ renderIndexMs: indexRenderMs,
+ renderBreakMs: breakRenderMs,
+ zanderLevels: a.zanderBreak && a.zanderBreak.levelCount ? a.zanderBreak.levelCount : 0
+ }, newLogRunId);
  return a;
  }
 
@@ -3485,6 +3720,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (map.hasLayer(fishIndexLayer) || map.hasLayer(zanderBreakLayer) || view3dHandle) runDepthWork(true);
  });
  btn3d.addEventListener('click', open3d);
+ analysisLogCopy.addEventListener('click', copyAnalysisDebugLog);
  depthCacheClear.addEventListener('click', clearDepthCache);
  debugToggle.addEventListener('change', async function () {
  settings.debugOverlayVisible = !!debugToggle.checked;
