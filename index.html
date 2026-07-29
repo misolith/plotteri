@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-cache-timeout-2';
 
 (async function () {
  'use strict';
@@ -1960,6 +1960,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_FETCH_TIMEOUT_MS = 12000;
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 45000;
+ var APP_BUILD_ID = '20260729-cache-timeout-2';
+ var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
@@ -2028,7 +2030,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  started: Date.now()
  };
  if (!meta || meta.mode === 'new-analysis' || meta.mode === 'toowide') analysisDebugLog = [];
- pushAnalysisLog('run:start', meta);
+ pushAnalysisLog('run:start', Object.assign({ build: APP_BUILD_ID, workerUrl: ANALYSIS_WORKER_URL }, meta || {}));
  }
 
  function finishAnalysisLogRun(type, data, expectedRunId) {
@@ -2060,6 +2062,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  lines.push('Plotteri analyysiloki');
  lines.push('kopioitu: ' + analysisIsoTime(Date.now()));
  lines.push('url: ' + location.href);
+ lines.push('build: ' + APP_BUILD_ID);
+ lines.push('worker: ' + ANALYSIS_WORKER_URL);
  lines.push('zoom: ' + map.getZoom());
  lines.push('center: ' + map.getCenter().lat.toFixed(5) + ',' + map.getCenter().lng.toFixed(5));
  lines.push('species: ' + currentSpeciesKey());
@@ -3044,7 +3048,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (analysisWorkerBroken || typeof Worker === 'undefined') return null;
  if (analysisWorker) return analysisWorker;
  try {
- analysisWorker = new Worker('analysis-worker.js', { type: 'module' });
+ analysisWorker = new Worker(ANALYSIS_WORKER_URL, { type: 'module' });
  analysisWorker.onmessage = function (e) {
  var msg = e.data || {};
  var pending = analysisWorkerPending.get(msg.id);
