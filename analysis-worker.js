@@ -1,12 +1,14 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-network-json-timeout-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-partial-tile-render-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
 var TILE_M = 6000;
 var TILE_TTL_MS = 30 * 24 * 3600 * 1000;
+var PARTIAL_TILE_TTL_MS = 24 * 3600 * 1000;
+var FAILED_TILE_TTL_MS = 30 * 1000;
 var MEM_MAX = 60;
 var MAX_TILES = 35;
 var CACHE_MAX_BYTES = 12 * 1024 * 1024;
@@ -15,6 +17,7 @@ var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var DEPTH_FETCH_TIMEOUT_MS = 12000;
 var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
+var DEPTH_TILES_SOFT_DEADLINE_MS = 2500;
 var IDB_READ_TIMEOUT_MS = 2500;
 var TILE_CACHE_PREFIX = 't:v3:';
 var RESULT_CACHE_PREFIX = 'r:v7:';
@@ -141,6 +144,17 @@ function putMem(key, tile) {
   while (memTiles.size > MEM_MAX) memTiles.delete(memTiles.keys().next().value);
 }
 
+function tileTtlMs(tile) {
+  if (!tile) return 0;
+  if (tile.failed) return FAILED_TILE_TTL_MS;
+  if (tile.partial) return PARTIAL_TILE_TTL_MS;
+  return TILE_TTL_MS;
+}
+
+function tileCacheable(tile) {
+  return !!(tile && !tile.failed);
+}
+
 async function trimCache() {
   if (Date.now() - lastTrimAt < 60000) return;
   lastTrimAt = Date.now();
@@ -174,47 +188,73 @@ async function fetchTile(key, stats) {
     s: [],
     sources: []
   };
+  var sykeStarted = Date.now();
   var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
-  try {
-    var sykeStarted = Date.now();
-    var sykeResponses = await Promise.all([
-      fetchJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
-      fetchJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
-    ]);
-    if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
-    tile.c = tile.c.concat(tagSource(parseContours(sykeResponses[0].json), 'syke'));
-    tile.b = tile.b.concat(tagSource(parseBands(sykeResponses[1].json), 'syke'));
+  var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
+  var requests = [
+    { key: 'syke-contours', group: 'syke', url: sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine') },
+    { key: 'syke-bands', group: 'syke', url: sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue') },
+    { key: 'traficom-contours', group: 'traficom', url: traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L') },
+    { key: 'traficom-bands', group: 'traficom', url: traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A') },
+    { key: 'traficom-soundings', group: 'traficom', url: traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P') }
+  ];
+  var responses = {};
+  var failures = 0;
+  var settled = await Promise.allSettled(requests.map(function (req) {
+    return fetchJsonWithTimeout(req.url).then(function (response) {
+      return { req: req, response: response };
+    });
+  }));
+  settled.forEach(function (item, index) {
+    var req = requests[index];
+    if (item.status === 'fulfilled') {
+      responses[req.key] = item.value.response;
+    } else {
+      failures++;
+      addStatsEvent(stats, 'tile:' + req.group + '-request-error', {
+        key: key,
+        request: req.key,
+        error: String(item.reason && item.reason.message || item.reason)
+      });
+    }
+  });
+  var sykeContour = responses['syke-contours'];
+  var sykeBand = responses['syke-bands'];
+  if (sykeContour && sykeBand && sykeContour.ok && sykeBand.ok) {
+    tile.c = tile.c.concat(tagSource(parseContours(sykeContour.json), 'syke'));
+    tile.b = tile.b.concat(tagSource(parseBands(sykeBand.json), 'syke'));
+    tile.ok = true;
     if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
     addStatsEvent(stats, 'tile:syke', {
       key: key,
       durationMs: Date.now() - sykeStarted,
       contours: tile.c.length,
       bands: tile.b.length,
-      status: sykeResponses[0].status + '/' + sykeResponses[1].status
+      status: sykeContour.status + '/' + sykeBand.status
     });
-  } catch (e) {
-    addStatsEvent(stats, 'tile:syke-error', { key: key, error: String(e && e.message || e) });
-    console.warn('SYKE-syvyystiilen haku epäonnistui:', key, e);
+  } else {
+    failures++;
+    addStatsEvent(stats, 'tile:syke-error', {
+      key: key,
+      error: 'SYKE WFS ' + (sykeContour ? sykeContour.status : 'missing') + '/' + (sykeBand ? sykeBand.status : 'missing')
+    });
   }
-  var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
-  try {
-    var traficomStarted = Date.now();
-    var traficomResponses = await Promise.all([
-      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
-      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
-      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
-    ]);
-    var denied = traficomResponses.filter(function (r) { return r.status === 401 || r.status === 403; });
-    if (denied.length) {
+  var traficomStarted = Date.now();
+  var traficomContour = responses['traficom-contours'];
+  var traficomBand = responses['traficom-bands'];
+  var traficomSounding = responses['traficom-soundings'];
+  var traficomResponses = [traficomContour, traficomBand, traficomSounding].filter(Boolean);
+  var denied = traficomResponses.filter(function (r) { return r.status === 401 || r.status === 403; });
+  if (denied.length) {
       console.info('Traficom: alue vaatii luvan (vapaa kattavuus: talousvyöhyke + Vuoksi + Kymijoki):', key);
       addStatsEvent(stats, 'tile:traficom-denied', { key: key, status: denied.map(function (r) { return r.status; }).join('/') });
-    } else if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
-      throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
-    } else {
+  } else if (traficomContour && traficomBand && traficomSounding &&
+      traficomContour.ok && traficomBand.ok && traficomSounding.ok) {
       var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
-      tile.c = tile.c.concat(tagSource(parseContours(traficomResponses[0].json), 'traficom'));
-      tile.b = tile.b.concat(tagSource(parseBands(traficomResponses[1].json), 'traficom'));
-      tile.s = tile.s.concat(tagSource(parseSoundings(traficomResponses[2].json), 'traficom'));
+      tile.c = tile.c.concat(tagSource(parseContours(traficomContour.json), 'traficom'));
+      tile.b = tile.b.concat(tagSource(parseBands(traficomBand.json), 'traficom'));
+      tile.s = tile.s.concat(tagSource(parseSoundings(traficomSounding.json), 'traficom'));
+      tile.ok = true;
       if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
       addStatsEvent(stats, 'tile:traficom', {
         key: key,
@@ -222,13 +262,20 @@ async function fetchTile(key, stats) {
         contours: tile.c.length - c0,
         bands: tile.b.length - b0,
         soundings: tile.s.length - s0,
-        status: traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status
+        status: traficomContour.status + '/' + traficomBand.status + '/' + traficomSounding.status
       });
-    }
-  } catch (e) {
-    addStatsEvent(stats, 'tile:traficom-error', { key: key, error: String(e && e.message || e) });
-    console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
+  } else {
+    failures++;
+    addStatsEvent(stats, 'tile:traficom-error', {
+      key: key,
+      error: 'Traficom WFS ' +
+        (traficomContour ? traficomContour.status : 'missing') + '/' +
+        (traficomBand ? traficomBand.status : 'missing') + '/' +
+        (traficomSounding ? traficomSounding.status : 'missing')
+    });
   }
+  tile.partial = !!(tile.ok && failures);
+  tile.failed = !tile.ok;
   addStatsEvent(stats, 'tile:network', {
     key: key,
     durationMs: Date.now() - tileStarted,
@@ -264,7 +311,7 @@ async function getTile(key, stats, opts) {
   var bypassDiskCache = opts && opts.bypassDiskCache;
   var onStage = opts && opts.onStage;
   var mem = memTiles.get(key);
-  if (mem && Date.now() - mem.t < TILE_TTL_MS) {
+  if (mem && Date.now() - mem.t < tileTtlMs(mem)) {
     if (stats) stats.mem++;
     addStatsEvent(stats, 'tile:mem', { key: key });
     return mem;
@@ -282,7 +329,7 @@ async function getTile(key, stats, opts) {
       try {
         if (onStage) onStage('tile:disk-read', { key: key });
         var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
-        if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
+        if (cached && cached.value && Date.now() - cached.value.t < tileTtlMs(cached.value)) {
           putMem(key, cached.value);
           if (stats) stats.disk++;
           addStatsEvent(stats, 'tile:disk', { key: key });
@@ -299,13 +346,15 @@ async function getTile(key, stats, opts) {
       tile = await withTimeout(fetchTile(key, stats), DEPTH_TILE_NETWORK_TIMEOUT_MS, 'tile network timeout');
     } catch (e) {
       addStatsEvent(stats, 'tile:network-error', { key: key, error: String(e && e.message || e) });
-      tile = { t: Date.now(), c: [], b: [], s: [], sources: [] };
+      tile = { t: Date.now(), c: [], b: [], s: [], sources: [], failed: true };
     }
     if (stats) stats.fetch++;
     putMem(key, tile);
-    var size = 0;
-    try { size = JSON.stringify(tile).length; } catch (e) { size = 100000; }
-    idbPut({ key: TILE_CACHE_PREFIX + key, value: tile, updated: Date.now(), size: size }).then(trimCache).catch(function () {});
+    if (tileCacheable(tile)) {
+      var size = 0;
+      try { size = JSON.stringify(tile).length; } catch (e) { size = 100000; }
+      idbPut({ key: TILE_CACHE_PREFIX + key, value: tile, updated: Date.now(), size: size }).then(trimCache).catch(function () {});
+    }
     return tile;
   })();
   fetching.set(key, promise);
@@ -320,6 +369,7 @@ async function ensureTiles(keys, onProgress, opts) {
   var results = [];
   var queue = keys.slice();
   var done = 0;
+  var firstDoneAt = 0;
   var stats = { mem: 0, disk: 0, fetch: 0, wait: 0, events: [], errors: [] };
   function progress(data) {
     if (!onProgress) return;
@@ -346,11 +396,28 @@ async function ensureTiles(keys, onProgress, opts) {
         console.warn('Syvyystiilen haku epäonnistui:', key, e);
       }
       done++;
+      if (!firstDoneAt) firstDoneAt = Date.now();
       progress();
     }
   }
-  await Promise.all([work(1), work(2), work(3)]);
-  return { tiles: results, stats: stats };
+  var allDone = Promise.all([work(1), work(2)]).then(function () { return 'done'; });
+  var softDeadline = new Promise(function (resolve) {
+    setTimeout(function () { resolve('soft'); }, DEPTH_TILES_SOFT_DEADLINE_MS);
+  });
+  var winner = await Promise.race([allDone, softDeadline]);
+  if (winner === 'soft' && results.length && done < keys.length) {
+    stats.partial = true;
+    stats.pending = keys.length - done;
+    addStatsEvent(stats, 'analysis:tiles-soft-deadline', {
+      durationMs: firstDoneAt ? Date.now() - firstDoneAt : DEPTH_TILES_SOFT_DEADLINE_MS,
+      done: done,
+      total: keys.length,
+      pending: keys.length - done
+    });
+    return { tiles: results.slice(), stats: stats, partial: true, pending: keys.length - done };
+  }
+  await allDone;
+  return { tiles: results, stats: stats, partial: false, pending: 0 };
 }
 
 async function handleBuild(msg) {
@@ -391,9 +458,15 @@ async function handleBuild(msg) {
   }, { bypassDiskCache: !!msg.bypassDiskCache });
   var tiles = tileResult.tiles;
   var stats = tileResult.stats || {};
+  if (tileResult.partial) {
+    stats.partial = true;
+    stats.pending = tileResult.pending || Math.max(0, keys.length - tiles.length);
+  }
   addStatsEvent(stats, 'analysis:tiles-ready', {
     durationMs: Date.now() - fetchStarted,
     tiles: tiles.length,
+    partial: stats.partial ? 1 : 0,
+    pending: stats.pending || 0,
     mem: stats.mem || 0,
     disk: stats.disk || 0,
     fetch: stats.fetch || 0,
@@ -401,8 +474,10 @@ async function handleBuild(msg) {
   });
   self.postMessage({ id: msg.id, progress: {
     event: 'analysis:tiles-ready',
-    done: keys.length,
+    done: stats.partial ? tiles.length : keys.length,
     total: keys.length,
+    partial: stats.partial ? 1 : 0,
+    pending: stats.pending || 0,
     mem: stats.mem || 0,
     disk: stats.disk || 0,
     fetch: stats.fetch || 0,
@@ -467,18 +542,33 @@ async function handleBuild(msg) {
     hasData: result && result.hasData ? 1 : 0
   });
   var sources = Object.keys(sourceSet);
-  resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
-  while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
-  try {
-    var rec = { t: Date.now(), result: result, sources: sources };
-    idbPut({
-      key: RESULT_CACHE_PREFIX + cacheKey,
-      value: rec,
-      updated: rec.t,
-      size: JSON.stringify({ sources: sources, nx: result && result.nx, ny: result && result.ny }).length +
-        ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
-    }).then(trimCache).catch(function () {});
-  } catch (e) { /* persistent analysis cache write is best effort */ }
+  if (result && stats.partial) {
+    result.partialTiles = {
+      done: tiles.length,
+      total: keys.length,
+      pending: stats.pending || 0
+    };
+  }
+  if (!stats.partial) {
+    resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
+    while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
+    try {
+      var rec = { t: Date.now(), result: result, sources: sources };
+      idbPut({
+        key: RESULT_CACHE_PREFIX + cacheKey,
+        value: rec,
+        updated: rec.t,
+        size: JSON.stringify({ sources: sources, nx: result && result.nx, ny: result && result.ny }).length +
+          ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
+      }).then(trimCache).catch(function () {});
+    } catch (e) { /* persistent analysis cache write is best effort */ }
+  } else {
+    addStatsEvent(stats, 'analysis:partial-result-not-cached', {
+      done: tiles.length,
+      total: keys.length,
+      pending: stats.pending || 0
+    });
+  }
   return { result: result, sources: sources, debug: {
     events: stats.events || [],
     errors: stats.errors || [],
@@ -487,7 +577,9 @@ async function handleBuild(msg) {
       disk: stats.disk || 0,
       fetch: stats.fetch || 0,
       wait: stats.wait || 0,
-      total: keys.length
+      total: keys.length,
+      partial: stats.partial ? 1 : 0,
+      pending: stats.pending || 0
     }
   } };
 }

@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-network-json-timeout-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-partial-tile-render-1';
 
 (async function () {
  'use strict';
@@ -1962,7 +1962,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
- var APP_BUILD_ID = '20260729-network-json-timeout-1';
+ var APP_BUILD_ID = '20260729-partial-tile-render-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
@@ -3352,7 +3352,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  reason: res.reason || '',
  sources: res.sources || [],
  events: res.debug && res.debug.events ? res.debug.events.length : 0,
- errors: res.debug && res.debug.errors ? res.debug.errors.length : 0
+ errors: res.debug && res.debug.errors ? res.debug.errors.length : 0,
+ partial: res.debug && res.debug.tileStats && res.debug.tileStats.partial ? 1 : 0,
+ pending: res.debug && res.debug.tileStats ? res.debug.tileStats.pending || 0 : 0
  });
  if (res.debug && res.debug.events) {
  res.debug.events.slice(-24).forEach(function (ev) { pushAnalysisLog('worker:' + ev.event, ev); });
@@ -3363,7 +3365,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
  res.result._analysisDebug = res.debug || null;
- storeAnalysisResult(analysisCacheKey, res.result, currentParamsKey);
+ if (!res.result.partialTiles) storeAnalysisResult(analysisCacheKey, res.result, currentParamsKey);
  if (res.cached) res.result._analysisCacheHit = true;
  }
  return res.result;
@@ -3512,6 +3514,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  function setCompletedAnalysisStatus(a) {
  if (!a) return;
  var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
+ var partialStatus = a.partialTiles && a.partialTiles.pending
+ ? ', osittainen ' + a.partialTiles.done + '/' + a.partialTiles.total + ' tiiltä'
+ : '';
  var zanderBreakStatus = '';
  if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
  var hist = a.zanderBreak.p95 > 0
@@ -3524,6 +3529,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
  (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
  ', ruudukko ' + a.nx + '×' + a.ny +
+ partialStatus +
  (a._analysisCacheHit ? ', cache' : '') +
  (a.zanderBreak && a.zanderBreak.levelCount ? ', kuha-käyriä ' + a.zanderBreak.levelCount + ' tasoa' : '') +
  zanderBreakStatus +
