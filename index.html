@@ -8,8 +8,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Plotteri">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta http-equiv="Cache-Control" content="no-store">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="manifest.json?v=20260729-pwa-update-bust-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -614,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-empty-cache-guard-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-pwa-update-bust-1';
 
 (async function () {
  'use strict';
@@ -1962,8 +1965,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260729-empty-cache-guard-1';
+var APP_BUILD_ID = '20260729-pwa-update-bust-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
+ var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
@@ -4014,7 +4018,7 @@ function storeAnalysisResult(key, result, paramsKey) {
 
  if ('serviceWorker' in navigator) {
  window.addEventListener('load', function () {
- navigator.serviceWorker.register('map-sw.js').catch(function (e) {
+ navigator.serviceWorker.register(MAP_SW_URL).catch(function (e) {
  console.warn('Service workerin rekisteröinti ei onnistunut:', e);
  });
  });
@@ -4676,7 +4680,7 @@ function storeAnalysisResult(key, result, paramsKey) {
 
  async function postServiceWorkerMessage(message) {
  if (!('serviceWorker' in navigator)) throw new Error('service worker unsupported');
- var reg = await navigator.serviceWorker.register('map-sw.js');
+ var reg = await navigator.serviceWorker.register(MAP_SW_URL);
  var target = serviceWorkerTarget(reg);
  if (!target) throw new Error('service worker not ready');
  return await new Promise(function (resolve, reject) {
