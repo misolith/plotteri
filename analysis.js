@@ -712,49 +712,38 @@ export function buildAnalysis(input) {
   function idw(lon, lat) {
     var bx = Math.floor((lon - west) / binLon);
     var by = Math.floor((lat - south) / binLat);
-    var found = [];
     var maxDistSq = maxDistM * maxDistM;
+    var num = 0, den = 0, count = 0;
+    var firstDepth = null;
+    var hasVariety = false;
     for (var ring = 0; ring <= maxRing; ring++) {
       for (var dx = -ring; dx <= ring; dx++) {
         for (var dy = -ring; dy <= ring; dy++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
           var arr = bins.get((bx + dx) + ':' + (by + dy));
-          if (arr) found.push.apply(found, arr);
+          if (!arr) continue;
+          for (var i = 0; i < arr.length; i++) {
+            var p = arr[i];
+            var dxm = (p.x - lon) * mPerLon;
+            var dym = (p.y - lat) * mPerLat;
+            var distSq = dxm * dxm + dym * dym;
+            if (distSq > maxDistSq) continue;
+            if (p.kind === 'sounding' && distSq < 25) return p.d;
+            if (firstDepth == null) {
+              firstDepth = p.d;
+            } else if (!hasVariety && Math.abs(p.d - firstDepth) > 0.05) {
+              hasVariety = true;
+            }
+            var wgt = 1 / Math.max(distSq, 25);
+            num += wgt * p.d;
+            den += wgt;
+            count++;
+          }
         }
       }
-      if (found.length >= 6 && ring >= 1 && hasDepthVariety(found, lon, lat, maxDistSq)) break;
-    }
-    if (!found.length) return NaN;
-    var num = 0, den = 0, count = 0;
-    for (var i = 0; i < found.length; i++) {
-      var p = found[i];
-      var dxm = (p.x - lon) * mPerLon;
-      var dym = (p.y - lat) * mPerLat;
-      var distSq = dxm * dxm + dym * dym;
-      if (distSq > maxDistSq) continue;
-      if (p.kind === 'sounding' && distSq < 25) return p.d;
-      var wgt = 1 / Math.max(distSq, 25);
-      num += wgt * p.d;
-      den += wgt;
-      count++;
+      if (count >= 6 && ring >= 1 && hasVariety) break;
     }
     return count ? num / den : NaN;
-  }
-
-  function hasDepthVariety(pointsFound, lon, lat, maxDistSq) {
-    var firstDepth = null;
-    for (var i = 0; i < pointsFound.length; i++) {
-      var p = pointsFound[i];
-      var dxm = (p.x - lon) * mPerLon;
-      var dym = (p.y - lat) * mPerLat;
-      if (dxm * dxm + dym * dym > maxDistSq) continue;
-      if (firstDepth == null) {
-        firstDepth = p.d;
-      } else if (Math.abs(p.d - firstDepth) > 0.05) {
-        return true;
-      }
-    }
-    return false;
   }
 
   // 3) vesimaski syvyysvyohykkeista (fallback: IDW-osumat)

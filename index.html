@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-cache-timeout-2';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-worker-stall-retry-1';
 
 (async function () {
  'use strict';
@@ -1959,8 +1959,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_MEM_MAX = 60;
  var DEPTH_FETCH_TIMEOUT_MS = 12000;
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
- var ANALYSIS_WORKER_TIMEOUT_MS = 45000;
- var APP_BUILD_ID = '20260729-cache-timeout-2';
+ var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
+ var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
+ var APP_BUILD_ID = '20260729-worker-stall-retry-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
@@ -3078,19 +3079,42 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!worker) return Promise.reject(new Error('worker unavailable'));
  return new Promise(function (resolve, reject) {
  var id = ++analysisWorkerMsgSeq;
- var timer = setTimeout(function () {
+ var totalTimer = null;
+ var stallTimer = null;
+ function clearTimers() {
+ if (totalTimer) clearTimeout(totalTimer);
+ if (stallTimer) clearTimeout(stallTimer);
+ totalTimer = null;
+ stallTimer = null;
+ }
+ function terminateAndReject(message) {
  if (!analysisWorkerPending.has(id)) return;
  analysisWorkerPending.delete(id);
  if (analysisWorker) {
  analysisWorker.terminate();
  analysisWorker = null;
  }
- reject(new Error('worker timeout'));
+ analysisWorkerBroken = false;
+ clearTimers();
+ reject(new Error(message));
+ }
+ function armStallTimer() {
+ if (stallTimer) clearTimeout(stallTimer);
+ stallTimer = setTimeout(function () {
+ terminateAndReject('worker stalled');
+ }, ANALYSIS_WORKER_STALL_TIMEOUT_MS);
+ }
+ totalTimer = setTimeout(function () {
+ terminateAndReject('worker timeout');
  }, ANALYSIS_WORKER_TIMEOUT_MS);
+ armStallTimer();
  analysisWorkerPending.set(id, {
- resolve: function (value) { clearTimeout(timer); resolve(value); },
- reject: function (error) { clearTimeout(timer); reject(error); },
- onProgress: onProgress
+ resolve: function (value) { clearTimers(); resolve(value); },
+ reject: function (error) { clearTimers(); reject(error); },
+ onProgress: function (progress) {
+ armStallTimer();
+ if (onProgress) onProgress(progress);
+ }
  });
  worker.postMessage(Object.assign({ id: id }, payload));
  });
@@ -3217,16 +3241,25 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return cachedAnalysis;
  }
  if (!analysisWorkerBroken) {
- try {
- var workerStart = analysisNowMs();
- pushAnalysisLog('worker:request', { pending: analysisWorkerPending.size + 1 });
- var res = await workerRequest(Object.assign({
+ var workerPayload = Object.assign({
  type: 'build',
  west: snap.west, south: snap.south, east: snap.east, north: snap.north,
  cellLonDeg: snap.cellLon, cellLatDeg: snap.cellLat,
  wind: effectiveAnalysisWind(), windKey: windAnalysisKey(),
  includeZanderBreak: map.hasLayer(zanderBreakLayer)
- }, sp), function (p) {
+ }, sp);
+ for (var workerAttempt = 0; workerAttempt < 2; workerAttempt++) {
+ try {
+ var bypassDiskCache = workerAttempt > 0;
+ var workerStart = analysisNowMs();
+ pushAnalysisLog('worker:request', {
+ pending: analysisWorkerPending.size + 1,
+ attempt: workerAttempt + 1,
+ bypassDiskCache: bypassDiskCache ? 1 : 0
+ });
+ var res = await workerRequest(Object.assign({}, workerPayload, {
+ bypassDiskCache: bypassDiskCache
+ }), function (p) {
  if (p.event) {
  pushAnalysisLog('worker:' + p.event, p);
  if (!p.total) {
@@ -3274,8 +3307,21 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return res.result;
  } catch (e) {
  if (e && e.message === 'worker canceled') return null;
- pushAnalysisLog('worker:error', { error: String(e && e.message || e) });
+ var workerError = String(e && e.message || e);
+ pushAnalysisLog('worker:error', {
+ error: workerError,
+ attempt: workerAttempt + 1,
+ retry: (workerAttempt === 0 && (workerError === 'worker stalled' || workerError === 'worker timeout')) ? 1 : 0
+ });
+ if (workerAttempt === 0 && (workerError === 'worker stalled' || workerError === 'worker timeout')) {
+ depthTileProgress = null;
+ setDepthStatus('Levycache jumitti, haetaan syvyystiilet uudestaan verkosta…');
+ pushAnalysisLog('worker:retry', { reason: workerError, bypassDiskCache: 1 });
+ continue;
+ }
  console.warn('Analyysiworker epäonnistui, käytetään suoraa laskentaa:', e);
+ }
+ break;
  }
  }
  // fallback: koko putki karttasaikeessa jos worker ei kaynnisty

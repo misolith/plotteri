@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-cache-timeout-2';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-worker-stall-retry-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -257,29 +257,34 @@ async function fetchWithTimeout(url) {
   }
 }
 
-async function getTile(key, stats) {
+async function getTile(key, stats, opts) {
+  var bypassDiskCache = opts && opts.bypassDiskCache;
   var mem = memTiles.get(key);
   if (mem && Date.now() - mem.t < TILE_TTL_MS) {
     if (stats) stats.mem++;
     addStatsEvent(stats, 'tile:mem', { key: key });
     return mem;
   }
-  if (fetching.has(key)) {
+  if (!bypassDiskCache && fetching.has(key)) {
     if (stats) stats.wait++;
     addStatsEvent(stats, 'tile:wait', { key: key });
     return fetching.get(key);
   }
   var promise = (async function () {
-    try {
-      var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
-      if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
-        putMem(key, cached.value);
-        if (stats) stats.disk++;
-        addStatsEvent(stats, 'tile:disk', { key: key });
-        return cached.value;
+    if (bypassDiskCache) {
+      addStatsEvent(stats, 'tile:disk-bypass', { key: key });
+    } else {
+      try {
+        var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
+        if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
+          putMem(key, cached.value);
+          if (stats) stats.disk++;
+          addStatsEvent(stats, 'tile:disk', { key: key });
+          return cached.value;
+        }
+      } catch (e) {
+        addStatsEvent(stats, 'tile:disk-error', { key: key, error: String(e && e.message || e) });
       }
-    } catch (e) {
-      addStatsEvent(stats, 'tile:disk-error', { key: key, error: String(e && e.message || e) });
     }
     var tile = await fetchTile(key, stats);
     if (stats) stats.fetch++;
@@ -297,7 +302,7 @@ async function getTile(key, stats) {
   }
 }
 
-async function ensureTiles(keys, onProgress) {
+async function ensureTiles(keys, onProgress, opts) {
   var results = [];
   var queue = keys.slice();
   var done = 0;
@@ -306,7 +311,7 @@ async function ensureTiles(keys, onProgress) {
     while (queue.length) {
       var key = queue.shift();
       try {
-        results.push(await getTile(key, stats));
+        results.push(await getTile(key, stats, opts));
       } catch (e) {
         addStatsEvent(stats, 'tile:error', { key: key, error: String(e && e.message || e) });
         console.warn('Syvyystiilen haku epäonnistui:', key, e);
@@ -333,18 +338,22 @@ async function handleBuild(msg) {
       errors: []
     } };
   }
-  try {
-    var diskHit = await withTimeout(idbGet(RESULT_CACHE_PREFIX + cacheKey), IDB_READ_TIMEOUT_MS, 'analysis disk cache read timeout');
-    if (diskHit && diskHit.value && diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
-      var diskValue = diskHit.value;
-      resultCache.set(cacheKey, { t: diskValue.t, result: diskValue.result, sources: diskValue.sources || [] });
-      while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
-      return { result: diskValue.result, sources: diskValue.sources || [], cached: true, debug: {
-        events: [{ event: 'analysis:worker-disk-cache-hit', t: Date.now() }],
-        errors: []
-      } };
-    }
-  } catch (e) { /* persistent analysis cache miss */ }
+  if (msg.bypassDiskCache) {
+    self.postMessage({ id: msg.id, progress: { event: 'analysis:disk-cache-bypass' } });
+  } else {
+    try {
+      var diskHit = await withTimeout(idbGet(RESULT_CACHE_PREFIX + cacheKey), IDB_READ_TIMEOUT_MS, 'analysis disk cache read timeout');
+      if (diskHit && diskHit.value && diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
+        var diskValue = diskHit.value;
+        resultCache.set(cacheKey, { t: diskValue.t, result: diskValue.result, sources: diskValue.sources || [] });
+        while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
+        return { result: diskValue.result, sources: diskValue.sources || [], cached: true, debug: {
+          events: [{ event: 'analysis:worker-disk-cache-hit', t: Date.now() }],
+          errors: []
+        } };
+      }
+    } catch (e) { /* persistent analysis cache miss */ }
+  }
   var keys = tileKeysForBounds(msg);
   if (keys.length > MAX_TILES) return { result: null, reason: 'toowide' };
   var fetchStarted = Date.now();
@@ -357,7 +366,7 @@ async function handleBuild(msg) {
       fetch: stats.fetch,
       wait: stats.wait
     } });
-  });
+  }, { bypassDiskCache: !!msg.bypassDiskCache });
   var tiles = tileResult.tiles;
   var stats = tileResult.stats || {};
   addStatsEvent(stats, 'analysis:tiles-ready', {
