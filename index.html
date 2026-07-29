@@ -3190,7 +3190,15 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  wind: effectiveAnalysisWind(), windKey: windAnalysisKey(),
  includeZanderBreak: map.hasLayer(zanderBreakLayer)
  }, sp), function (p) {
- if (p.event) pushAnalysisLog('worker:' + p.event, p);
+ if (p.event) {
+ pushAnalysisLog('worker:' + p.event, p);
+ if (!p.total) {
+ if (p.event === 'analysis:compute-start') setDepthStatus('Lasketaan analyysiruudukkoa…');
+ else if (p.event === 'analysis:merge') setDepthStatus('Yhdistetään syvyystiilien geometriat…');
+ else if (p.event === 'analysis:zander-break') setDepthStatus('Lasketaan kuhan taitteita…');
+ return;
+ }
+ }
  depthTileProgress = {
  done: p.done || 0,
  total: p.total || 0,
@@ -3199,6 +3207,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  fetch: p.fetch || 0,
  wait: p.wait || 0
  };
+ pushAnalysisLog('worker:tile-progress', depthTileProgress);
  if (p.total > 1) {
  var source = 'mem ' + depthTileProgress.mem + ', levy ' + depthTileProgress.disk + ', verkko ' + depthTileProgress.fetch;
  if (depthTileProgress.wait) source += ', odottaa ' + depthTileProgress.wait;
@@ -3267,7 +3276,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  north: snap.north,
  cellLonDeg: snap.cellLon,
  cellLatDeg: snap.cellLat,
- includeZanderBreak: map.hasLayer(zanderBreakLayer)
+ includeZanderBreak: map.hasLayer(zanderBreakLayer),
+ onDebug: function (event) {
+ pushAnalysisLog('fallback:' + (event.event || 'analysis:phase'), event);
+ }
  });
  pushAnalysisLog('fallback:computed', {
  msCompute: Math.round(analysisNowMs() - computeStart),

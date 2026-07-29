@@ -347,6 +347,24 @@ async function handleBuild(msg) {
   });
   var tiles = tileResult.tiles;
   var stats = tileResult.stats || {};
+  addStatsEvent(stats, 'analysis:tiles-ready', {
+    durationMs: Date.now() - fetchStarted,
+    tiles: tiles.length,
+    mem: stats.mem || 0,
+    disk: stats.disk || 0,
+    fetch: stats.fetch || 0,
+    wait: stats.wait || 0
+  });
+  self.postMessage({ id: msg.id, progress: {
+    event: 'analysis:tiles-ready',
+    done: keys.length,
+    total: keys.length,
+    mem: stats.mem || 0,
+    disk: stats.disk || 0,
+    fetch: stats.fetch || 0,
+    wait: stats.wait || 0
+  } });
+  var mergeStarted = Date.now();
   var contourById = new Map();
   var bandById = new Map();
   var soundingById = new Map();
@@ -357,7 +375,25 @@ async function handleBuild(msg) {
     (tile.s || []).forEach(function (s) { soundingById.set((s.source || '') + ':' + s.id, s); });
     (tile.sources || []).forEach(function (src) { sourceSet[src] = true; });
   });
+  addStatsEvent(stats, 'analysis:merge', {
+    durationMs: Date.now() - mergeStarted,
+    contours: contourById.size,
+    bands: bandById.size,
+    soundings: soundingById.size
+  });
+  self.postMessage({ id: msg.id, progress: {
+    event: 'analysis:merge',
+    contours: contourById.size,
+    bands: bandById.size,
+    soundings: soundingById.size
+  } });
   var computeStarted = Date.now();
+  self.postMessage({ id: msg.id, progress: {
+    event: 'analysis:compute-start',
+    contours: contourById.size,
+    bands: bandById.size,
+    soundings: soundingById.size
+  } });
   var result = buildAnalysis({
     contours: Array.from(contourById.values()),
     bands: Array.from(bandById.values()),
@@ -373,7 +409,11 @@ async function handleBuild(msg) {
     north: msg.north,
     cellLonDeg: msg.cellLonDeg,
     cellLatDeg: msg.cellLatDeg,
-    includeZanderBreak: !!msg.includeZanderBreak
+    includeZanderBreak: !!msg.includeZanderBreak,
+    onDebug: function (event) {
+      addStatsEvent(stats, event.event || 'analysis:phase', event);
+      self.postMessage({ id: msg.id, progress: Object.assign({}, event) });
+    }
   });
   addStatsEvent(stats, 'analysis:computed', {
     durationMs: Date.now() - computeStarted,

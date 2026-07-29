@@ -614,6 +614,22 @@ function buildZanderBreakLayer(params) {
 
 // ---------- syvyysruudukko ja indeksi ----------
 export function buildAnalysis(input) {
+  var debug = typeof input.onDebug === 'function' ? input.onDebug : null;
+  function nowMs() {
+    return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now();
+  }
+  var debugStart = nowMs();
+  var debugLast = debugStart;
+  function emitDebug(event, data) {
+    if (!debug) return;
+    var t = nowMs();
+    debug(Object.assign({
+      event: event,
+      durationMs: Math.round(t - debugLast),
+      totalMs: Math.round(t - debugStart)
+    }, data || {}));
+    debugLast = t;
+  }
   var contours = input.contours || [];
   var bands = input.bands || [];
   var soundings = input.soundings || [];
@@ -666,6 +682,13 @@ export function buildAnalysis(input) {
     var stride = Math.ceil(points.length / 8000);
     points = points.filter(function (_, i) { return i % stride === 0; });
   }
+  emitDebug('analysis:points', {
+    contours: contours.length,
+    bands: bands.length,
+    soundings: soundings.length,
+    points: points.length,
+    grid: nx + 'x' + ny
+  });
   if (points.length < 8) {
     return { nx: nx, ny: ny, west: west, south: south, east: east, north: north, cellM: cellM, hasData: false };
   }
@@ -681,6 +704,7 @@ export function buildAnalysis(input) {
     if (!arr) { arr = []; bins.set(key, arr); }
     arr.push(p);
   });
+  emitDebug('analysis:bins', { bins: bins.size });
 
   var maxDistM = Math.max(180, cellM * 3);
   var maxRing = Math.ceil(maxDistM / binM);
@@ -756,6 +780,7 @@ export function buildAnalysis(input) {
       if (!isNaN(d)) mask[idx] = 1;
     }
   }
+  emitDebug('analysis:depth-grid', { cells: nx * ny });
 
   // 4) gradientti erotusosamaaralla
   var slope = new Float32Array(nx * ny);
@@ -781,6 +806,7 @@ export function buildAnalysis(input) {
       slope[idx] = Math.sqrt(gxm * gxm + gym * gym);
     }
   }
+  emitDebug('analysis:slope', { cells: nx * ny });
 
   // 5) tuulialtistus: 0-kayrat rantaviivana, normaali . tuulivektori
   var windExp = new Float32Array(nx * ny);
@@ -864,6 +890,7 @@ export function buildAnalysis(input) {
         }
     });
   }
+  emitDebug('analysis:wind', { windScale: Number(windScale.toFixed ? windScale.toFixed(3) : windScale) });
 
   function sampleDepth(lon, lat) {
     var gx2 = Math.floor((lon - west) / cellLon);
@@ -905,6 +932,7 @@ export function buildAnalysis(input) {
     score[idx] = s;
     if (s >= weights.minScoreToShow) hasAny = true;
   }
+  emitDebug('analysis:score', { hasAny: hasAny ? 1 : 0 });
 
   var zanderBreak = input.includeZanderBreak === false ? null : buildZanderBreakLayer({
     contours: contours,
@@ -922,6 +950,11 @@ export function buildAnalysis(input) {
     mask: mask,
     lightShiftM: lightShiftM,
     strat: strat
+  });
+  emitDebug('analysis:zander-break', {
+    enabled: input.includeZanderBreak === false ? 0 : 1,
+    levels: zanderBreak && zanderBreak.levelCount ? zanderBreak.levelCount : 0,
+    strong: zanderBreak && zanderBreak.strongCount ? zanderBreak.strongCount : 0
   });
 
   return {
