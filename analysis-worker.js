@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-layer-reuse-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-network-json-timeout-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -14,6 +14,7 @@ var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var DEPTH_FETCH_TIMEOUT_MS = 12000;
+var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
 var IDB_READ_TIMEOUT_MS = 2500;
 var TILE_CACHE_PREFIX = 't:v3:';
 var RESULT_CACHE_PREFIX = 'r:v7:';
@@ -177,12 +178,12 @@ async function fetchTile(key, stats) {
   try {
     var sykeStarted = Date.now();
     var sykeResponses = await Promise.all([
-      fetchWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
-      fetchWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
+      fetchJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
+      fetchJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
     ]);
     if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
-    tile.c = tile.c.concat(tagSource(parseContours(await sykeResponses[0].json()), 'syke'));
-    tile.b = tile.b.concat(tagSource(parseBands(await sykeResponses[1].json()), 'syke'));
+    tile.c = tile.c.concat(tagSource(parseContours(sykeResponses[0].json), 'syke'));
+    tile.b = tile.b.concat(tagSource(parseBands(sykeResponses[1].json), 'syke'));
     if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
     addStatsEvent(stats, 'tile:syke', {
       key: key,
@@ -199,9 +200,9 @@ async function fetchTile(key, stats) {
   try {
     var traficomStarted = Date.now();
     var traficomResponses = await Promise.all([
-      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
-      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
-      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
+      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
+      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
+      fetchJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
     ]);
     var denied = traficomResponses.filter(function (r) { return r.status === 401 || r.status === 403; });
     if (denied.length) {
@@ -211,9 +212,9 @@ async function fetchTile(key, stats) {
       throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
     } else {
       var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
-      tile.c = tile.c.concat(tagSource(parseContours(await traficomResponses[0].json()), 'traficom'));
-      tile.b = tile.b.concat(tagSource(parseBands(await traficomResponses[1].json()), 'traficom'));
-      tile.s = tile.s.concat(tagSource(parseSoundings(await traficomResponses[2].json()), 'traficom'));
+      tile.c = tile.c.concat(tagSource(parseContours(traficomResponses[0].json), 'traficom'));
+      tile.b = tile.b.concat(tagSource(parseBands(traficomResponses[1].json), 'traficom'));
+      tile.s = tile.s.concat(tagSource(parseSoundings(traficomResponses[2].json), 'traficom'));
       if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
       addStatsEvent(stats, 'tile:traficom', {
         key: key,
@@ -244,14 +245,16 @@ function tagSource(features, source) {
   return features;
 }
 
-async function fetchWithTimeout(url) {
+async function fetchJsonWithTimeout(url) {
   var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   var timer = controller ? setTimeout(function () { controller.abort(); }, DEPTH_FETCH_TIMEOUT_MS) : null;
   try {
-    return await fetch(url, {
+    var response = await fetch(url, {
       cache: 'no-store',
       signal: controller ? controller.signal : undefined
     });
+    var json = await response.json();
+    return { ok: response.ok, status: response.status, json: json };
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -291,7 +294,13 @@ async function getTile(key, stats, opts) {
       }
     }
     if (onStage) onStage('tile:network-start', { key: key });
-    var tile = await fetchTile(key, stats);
+    var tile;
+    try {
+      tile = await withTimeout(fetchTile(key, stats), DEPTH_TILE_NETWORK_TIMEOUT_MS, 'tile network timeout');
+    } catch (e) {
+      addStatsEvent(stats, 'tile:network-error', { key: key, error: String(e && e.message || e) });
+      tile = { t: Date.now(), c: [], b: [], s: [], sources: [] };
+    }
     if (stats) stats.fetch++;
     putMem(key, tile);
     var size = 0;

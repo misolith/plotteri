@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-layer-reuse-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-network-json-timeout-1';
 
 (async function () {
  'use strict';
@@ -1958,10 +1958,11 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_MAX_TILES_PER_VIEW = 35;
  var DEPTH_MEM_MAX = 60;
  var DEPTH_FETCH_TIMEOUT_MS = 12000;
+ var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
- var APP_BUILD_ID = '20260729-layer-reuse-1';
+ var APP_BUILD_ID = '20260729-network-json-timeout-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
@@ -2214,14 +2215,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  });
  }
 
- async function fetchDepthWithTimeout(url) {
+ async function fetchDepthJsonWithTimeout(url) {
  var controller = window.AbortController ? new AbortController() : null;
  var timeout = controller ? setTimeout(function () { controller.abort(); }, DEPTH_FETCH_TIMEOUT_MS) : null;
  try {
- return await fetch(url, {
+ var response = await fetch(url, {
  cache: 'no-store',
  signal: controller ? controller.signal : undefined
  });
+ var json = await response.json();
+ return { ok: response.ok, status: response.status, json: json };
  } finally {
  if (timeout) clearTimeout(timeout);
  }
@@ -2263,12 +2266,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  try {
  var sykeStart = analysisNowMs();
  var sykeResponses = await Promise.all([
- fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
- fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
+ fetchDepthJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
+ fetchDepthJsonWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
  ]);
  if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
- tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
- tile.b = tile.b.concat(parseBands(await sykeResponses[1].json()));
+ tile.c = tile.c.concat(parseContours(sykeResponses[0].json));
+ tile.b = tile.b.concat(parseBands(sykeResponses[1].json));
  if (tile.c.length || tile.b.length) tile.sources.push('SYKE');
  pushAnalysisLog('tile:syke', { key: key, ms: Math.round(analysisNowMs() - sykeStart), c: tile.c.length, b: tile.b.length });
  } catch (e) {
@@ -2279,17 +2282,17 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  try {
  var traficomStart = analysisNowMs();
  var traficomResponses = await Promise.all([
- fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
- fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
- fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
+ fetchDepthJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
+ fetchDepthJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
+ fetchDepthJsonWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
  ]);
  if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
  throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
  }
  var c0 = tile.c.length, b0 = tile.b.length, s0 = tile.s.length;
- tile.c = tile.c.concat(parseContours(await traficomResponses[0].json()));
- tile.b = tile.b.concat(parseBands(await traficomResponses[1].json()));
- tile.s = tile.s.concat(parseSoundings(await traficomResponses[2].json()));
+ tile.c = tile.c.concat(parseContours(traficomResponses[0].json));
+ tile.b = tile.b.concat(parseBands(traficomResponses[1].json));
+ tile.s = tile.s.concat(parseSoundings(traficomResponses[2].json));
  if (tile.c.length > c0 || tile.b.length > b0 || tile.s.length > s0) tile.sources.push('Traficom');
  pushAnalysisLog('tile:traficom', {
  key: key,
