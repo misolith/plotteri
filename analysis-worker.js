@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-cache-measure-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-empty-cache-guard-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -22,7 +22,7 @@ var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
 var DEPTH_TILES_SOFT_DEADLINE_MS = 2500;
 var IDB_READ_TIMEOUT_MS = 2500;
 var TILE_CACHE_PREFIX = 't:v4:';
-var RESULT_CACHE_PREFIX = 'r:v7:';
+var RESULT_CACHE_PREFIX = 'r:v8:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -156,8 +156,20 @@ function tileTtlMs(tile) {
   return TILE_TTL_MS;
 }
 
+function tileHasGeometry(tile) {
+  return !!(tile && (
+    (tile.c && tile.c.length) ||
+    (tile.b && tile.b.length) ||
+    (tile.s && tile.s.length)
+  ));
+}
+
+function tileUsable(tile) {
+  return !!(tile && !tile.failed && tileHasGeometry(tile));
+}
+
 function tileCacheable(tile) {
-  return !!(tile && !tile.failed);
+  return tileUsable(tile);
 }
 
 async function trimCache(prefix, maxEntries, maxBytes, ttlMs) {
@@ -316,7 +328,7 @@ async function getTile(key, stats, opts) {
   var bypassDiskCache = opts && opts.bypassDiskCache;
   var onStage = opts && opts.onStage;
   var mem = memTiles.get(key);
-  if (mem && Date.now() - mem.t < tileTtlMs(mem)) {
+  if (mem && tileUsable(mem) && Date.now() - mem.t < tileTtlMs(mem)) {
     if (stats) stats.mem++;
     addStatsEvent(stats, 'tile:mem', { key: key });
     return mem;
@@ -349,7 +361,10 @@ async function getTile(key, stats, opts) {
         };
         addStatsEvent(stats, 'tile:disk-done', diskDone);
         if (onStage) onStage('tile:disk-done', diskDone);
-        if (cached && cached.value && Date.now() - cached.value.t < tileTtlMs(cached.value)) {
+        if (cached && cached.value && !tileUsable(cached.value)) {
+          addStatsEvent(stats, 'tile:disk-empty', { key: key });
+          idbDelete([TILE_CACHE_PREFIX + key]).catch(function () {});
+        } else if (cached && cached.value && Date.now() - cached.value.t < tileTtlMs(cached.value)) {
           putMem(key, cached.value);
           if (stats) stats.disk++;
           addStatsEvent(stats, 'tile:disk', { key: key });
@@ -448,7 +463,7 @@ async function handleBuild(msg) {
     Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0),
     msg.includeZanderBreak ? 'zander' : 'base'].join('|');
   var hit = resultCache.get(cacheKey);
-  if (hit && Date.now() - hit.t < RESULT_TTL_MS) {
+  if (hit && hit.result && hit.result.hasData && Date.now() - hit.t < RESULT_TTL_MS) {
     resultCache.delete(cacheKey);
     resultCache.set(cacheKey, hit);
     return { result: hit.result, sources: hit.sources, cached: true, debug: {
@@ -461,7 +476,8 @@ async function handleBuild(msg) {
   } else {
     try {
       var diskHit = await withTimeout(idbGet(RESULT_CACHE_PREFIX + cacheKey), IDB_READ_TIMEOUT_MS, 'analysis disk cache read timeout');
-      if (diskHit && diskHit.value && diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
+      if (diskHit && diskHit.value && diskHit.value.result && diskHit.value.result.hasData &&
+          diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
         var diskValue = diskHit.value;
         resultCache.set(cacheKey, { t: diskValue.t, result: diskValue.result, sources: diskValue.sources || [] });
         while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
@@ -571,7 +587,7 @@ async function handleBuild(msg) {
       pending: stats.pending || 0
     };
   }
-  if (!stats.partial) {
+  if (result && result.hasData && !stats.partial) {
     resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
     while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
     try {
@@ -584,11 +600,16 @@ async function handleBuild(msg) {
           ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
       }).then(function () { return trimCache(RESULT_CACHE_PREFIX, RESULT_CACHE_MAX_ENTRIES, RESULT_CACHE_MAX_BYTES, RESULT_TTL_MS); }).catch(function () {});
     } catch (e) { /* persistent analysis cache write is best effort */ }
-  } else {
+  } else if (stats.partial) {
     addStatsEvent(stats, 'analysis:partial-result-not-cached', {
       done: tiles.length,
       total: keys.length,
       pending: stats.pending || 0
+    });
+  } else {
+    addStatsEvent(stats, 'analysis:empty-result-not-cached', {
+      grid: result ? result.nx + 'x' + result.ny : '',
+      points: result ? result.pointCount || 0 : 0
     });
   }
   return { result: result, sources: sources, debug: {

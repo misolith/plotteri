@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-cache-measure-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-empty-cache-guard-1';
 
 (async function () {
  'use strict';
@@ -1962,9 +1962,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
- var APP_BUILD_ID = '20260729-cache-measure-1';
+var APP_BUILD_ID = '20260729-empty-cache-guard-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
- var DEPTH_KEY_PREFIX = 'depthtile:v3:';
+ var DEPTH_KEY_PREFIX = 'depthtile:v4:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
  var depthWorkTimer = null;
@@ -2205,6 +2205,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  }
 
+ function depthTileHasGeometry(tile) {
+ return !!(tile && (
+ (tile.c && tile.c.length) ||
+ (tile.b && tile.b.length) ||
+ (tile.s && tile.s.length)
+ ));
+ }
+
  function promiseWithTimeout(promise, ms, label) {
  var timer;
  var timeout = new Promise(function (_, reject) {
@@ -2232,7 +2240,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
 
  async function getDepthTile(key) {
  var mem = depthTilesMem.get(key);
- if (mem && Date.now() - mem.t < DEPTH_TILE_TTL_MS) {
+ if (mem && depthTileHasGeometry(mem) && Date.now() - mem.t < DEPTH_TILE_TTL_MS) {
  pushAnalysisLog('tile:mem', { key: key });
  return mem;
  }
@@ -2247,7 +2255,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  } catch (e) {
  pushAnalysisLog('tile:disk-error', { key: key, error: String(e && e.message || e) });
  }
- if (cached && cached.t && Date.now() - cached.t < DEPTH_TILE_TTL_MS) {
+ if (cached && !depthTileHasGeometry(cached)) {
+ pushAnalysisLog('tile:disk-empty', { key: key });
+ } else if (cached && cached.t && Date.now() - cached.t < DEPTH_TILE_TTL_MS) {
  putDepthMem(key, cached);
  pushAnalysisLog('tile:disk', { key: key });
  return cached;
@@ -2305,8 +2315,14 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  pushAnalysisLog('tile:traficom-error', { key: key, error: String(e && e.message || e) });
  console.warn('Traficom-syvyystiilen haku epäonnistui:', key, e);
  }
+ if (depthTileHasGeometry(tile)) {
  putDepthMem(key, tile);
  saveJSON(DEPTH_KEY_PREFIX + key, tile).then(trimDepthCache);
+ } else {
+ tile.failed = true;
+ tile.t = Date.now();
+ putDepthMem(key, tile);
+ }
  return tile;
  })();
  depthFetching.set(key, promise);
@@ -3241,8 +3257,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return best.hit.result;
  }
 
- function storeAnalysisResult(key, result, paramsKey) {
- if (!key || !result) return;
+function storeAnalysisResult(key, result, paramsKey) {
+ if (!key || !result || !result.hasData) return;
  result._analysisCacheHit = false;
  result._analysisCacheKey = key;
  if (paramsKey) result._analysisParamsKey = paramsKey;
@@ -3568,7 +3584,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  updateMapDepthHud();
  return null;
  }
- if (lastAnalysis && lastAnalysis.reqCellM === analysisCellM() &&
+ if (lastAnalysis && lastAnalysis.hasData && lastAnalysis.reqCellM === analysisCellM() &&
  lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
  beginAnalysisLogRun({
  mode: 'reuse-visible-analysis',
@@ -3659,9 +3675,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  finishAnalysisLogRun('run:stale', { seq: seq, currentSeq: depthBuildSeq }, newLogRunId);
  return null;
  }
- lastAnalysis = a;
- lastAnalysisParamsKey = analysisParamsKey();
  if (!a || !a.hasData) {
+ lastAnalysis = null;
+ lastAnalysisParamsKey = null;
  clearIndexOverlay();
  clearZanderBreakOverlay();
  setTraficomAttribution(false);
@@ -3671,6 +3687,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  finishAnalysisLogRun('run:finish', { hasData: 0, reason: a ? 'empty-analysis' : 'null-analysis' }, newLogRunId);
  return null;
  }
+ lastAnalysis = a;
+ lastAnalysisParamsKey = analysisParamsKey();
  var indexRenderStart = analysisNowMs();
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(a); else clearIndexOverlay();
  var indexRenderMs = Math.round(analysisNowMs() - indexRenderStart);
