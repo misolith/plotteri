@@ -12,7 +12,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json?v=20260729-zander-render-guard-1">
+<link rel="manifest" href="manifest.json?v=20260729-zander-layer-balance-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -617,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-zander-render-guard-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-zander-layer-balance-1';
 
 (async function () {
  'use strict';
@@ -1965,7 +1965,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260729-zander-render-guard-1';
+var APP_BUILD_ID = '20260729-zander-layer-balance-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
@@ -2513,7 +2513,9 @@ var APP_BUILD_ID = '20260729-zander-render-guard-1';
 
  var ZANDER_BREAK_MIN_VISIBLE = 0.34;
  var ZANDER_BREAK_RENDER_BUDGET_MS = 2500;
- var ZANDER_BREAK_MAX_LINES = 80;
+ var ZANDER_BREAK_MAX_STRONG_LINES = 80;
+ var ZANDER_BREAK_MAX_WEAK_LINES = 80;
+ var ZANDER_BREAK_MAX_LINES = ZANDER_BREAK_MAX_STRONG_LINES + ZANDER_BREAK_MAX_WEAK_LINES;
  var ZANDER_BREAK_MAX_LINE_POINTS = 260;
 
  function zanderBreakColor(s) {
@@ -2546,6 +2548,13 @@ function zanderBreakStrongAt(a, x, y) {
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
  return !!(a.mask[idx] && a.zanderBreak.strong[idx] > 1);
+ }
+
+ function zanderBreakStrengthAt(a, x, y) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.strong) return 0;
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return 0;
+ var idx = y * a.nx + x;
+ return a.mask[idx] ? (a.zanderBreak.strong[idx] || 0) : 0;
  }
 
  function zanderBreakPairMatches(a, idx, nIdx) {
@@ -2584,13 +2593,15 @@ function zanderBreakStrongAt(a, x, y) {
  var px = x + 0.5 + (nx - x) * t;
  var py = y + 0.5 + (ny - y) * t;
  var score = Math.max(zanderBreakCellScore(a, x, y), zanderBreakCellScore(a, nx, ny));
- var candidate = { x: x, y: y, idx: idx, px: px, py: py, score: score, high: zanderBreakHighAt(a, x, y) || zanderBreakHighAt(a, nx, ny), dir: dir };
+ var strength = Math.max(zanderBreakStrengthAt(a, x, y), zanderBreakStrengthAt(a, nx, ny));
+ var candidate = { x: x, y: y, idx: idx, px: px, py: py, score: score, strength: strength, high: strength > 1, dir: dir };
  if (!best || candidate.score > best.score) best = candidate;
  }
  consider(x + 1, y, 'right');
  consider(x, y + 1, 'up');
  if (!best && strong0 && s0 === 0) {
- best = { x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5, score: zanderBreakCellScore(a, x, y), high: zanderBreakHighAt(a, x, y), dir: 'zero' };
+ var zeroStrength = zanderBreakStrengthAt(a, x, y);
+ best = { x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5, score: zanderBreakCellScore(a, x, y), strength: zeroStrength, high: zeroStrength > 1, dir: 'zero' };
  }
  return best;
  }
@@ -2705,7 +2716,7 @@ function zanderBreakStrongAt(a, x, y) {
  if (!isFinite(s)) return null;
  return {
  x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5,
- s: s, strong: zanderBreakStrongAt(a, x, y), high: zanderBreakHighAt(a, x, y), score: zanderBreakCellScore(a, x, y)
+ s: s, strong: zanderBreakStrongAt(a, x, y), strength: zanderBreakStrengthAt(a, x, y), high: zanderBreakHighAt(a, x, y), score: zanderBreakCellScore(a, x, y)
  };
  }
 
@@ -2720,6 +2731,7 @@ function zanderBreakStrongAt(a, x, y) {
  px: c0.px + (c1.px - c0.px) * t,
  py: c0.py + (c1.py - c0.py) * t,
  score: Math.max(c0.score, c1.score),
+ strength: Math.max(c0.strength || 0, c1.strength || 0),
  strong: c0.strong || c1.strong,
  high: c0.high || c1.high
  };
@@ -2769,8 +2781,8 @@ function zanderBreakStrongAt(a, x, y) {
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) continue;
  var idx = y * a.nx + x;
  if (onlySet && !compSet.has(idx)) continue;
- if (!zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy)) continue;
- out.push(zanderBreakCenterCrossing(a, x, y) || { x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y), high: zanderBreakHighAt(a, x, y) });
+	 if (!zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy)) continue;
+	 out.push(zanderBreakCenterCrossing(a, x, y) || { x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y), strength: zanderBreakStrengthAt(a, x, y), high: zanderBreakHighAt(a, x, y) });
  }
  }
  return out;
@@ -2817,7 +2829,7 @@ function zanderBreakStrongAt(a, x, y) {
  var k0 = zanderBreakPointKey(p0);
  var k1 = zanderBreakPointKey(p1);
  if (k0 === k1) return;
- segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0), high: !!(p0.high || p1.high) });
+ segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0), strength: Math.max(p0.strength || 0, p1.strength || 0), high: !!(p0.high || p1.high) });
  }
  for (var y = 0; y < a.ny - 1; y++) {
  if (renderBudgetExceeded()) break;
@@ -2891,6 +2903,8 @@ function zanderBreakStrongAt(a, x, y) {
  var points = [startPoint, other.point];
  var score = seg.score;
  var high = !!seg.high;
+ var highSegments = seg.strength > 1 ? 1 : 0;
+ var weakSegments = seg.strength === 1 ? 1 : 0;
  used[segIdx] = 1;
  var prevPoint = startPoint;
  var currentPoint = other.point;
@@ -2903,12 +2917,14 @@ function zanderBreakStrongAt(a, x, y) {
  points.push(next.point);
  score = Math.max(score, segments[nextIdx].score);
  high = high || !!segments[nextIdx].high;
+ if (segments[nextIdx].strength > 1) highSegments++;
+ else if (segments[nextIdx].strength === 1) weakSegments++;
  prevPoint = currentPoint;
  currentPoint = next.point;
  currentKey = next.key;
  if (currentKey === startKey) break;
  }
- return { points: points, score: score, high: high };
+ return { points: points, score: score, high: high, highSegments: highSegments, weakSegments: weakSegments };
  }
  var order = [];
  for (si = 0; si < segments.length; si++) {
@@ -2917,7 +2933,7 @@ function zanderBreakStrongAt(a, x, y) {
  order.push({ idx: si, endpoint: degA <= 1 ? segments[si].ak : degB <= 1 ? segments[si].bk : segments[si].ak, open: degA <= 1 || degB <= 1 });
  }
  order.sort(function (aOrd, bOrd) { return (aOrd.open === bOrd.open ? 0 : aOrd.open ? -1 : 1); });
- for (var oi = 0; oi < order.length && lines.length < ZANDER_BREAK_MAX_LINES; oi++) {
+ for (var oi = 0; oi < order.length && lines.length < ZANDER_BREAK_MAX_STRONG_LINES; oi++) {
  if (renderBudgetExceeded()) break;
  var start = order[oi];
  if (used[start.idx]) continue;
@@ -2928,14 +2944,30 @@ function zanderBreakStrongAt(a, x, y) {
  var lenM = zanderBreakLineLengthM(latlngs);
  if (lenM < minLenM) continue;
  var maxTurn = maxTurnAngleDeg(latlngs);
- if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1, lowConfidence: !traced.high });
+ if (latlngs.length >= 2) {
+ var lineLowConfidence = traced.weakSegments > 0 && traced.weakSegments >= traced.highSegments;
+ lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1, lowConfidence: lineLowConfidence });
  }
- if (!renderPartial && lines.length < ZANDER_BREAK_MAX_LINES) addZanderBreakRidgeFallbacks(a, lines, minLenM, renderBudgetExceeded);
- lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
- if (lines.length > ZANDER_BREAK_MAX_LINES) {
- lines.length = ZANDER_BREAK_MAX_LINES;
+ }
+ if (!renderPartial) addZanderBreakRidgeFallbacks(a, lines, minLenM, renderBudgetExceeded);
+ if (!renderPartial) addZanderBreakCandidateFallbacks(a, lines, Math.max(45, minLenM * 0.3), renderBudgetExceeded);
+ var strongLines = [];
+ var weakLines = [];
+ for (var lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+ if (lines[lineIdx].lowConfidence) weakLines.push(lines[lineIdx]);
+ else strongLines.push(lines[lineIdx]);
+ }
+ strongLines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
+ weakLines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
+ if (strongLines.length > ZANDER_BREAK_MAX_STRONG_LINES) {
+ strongLines.length = ZANDER_BREAK_MAX_STRONG_LINES;
  renderPartial = true;
  }
+ if (weakLines.length > ZANDER_BREAK_MAX_WEAK_LINES) {
+ weakLines.length = ZANDER_BREAK_MAX_WEAK_LINES;
+ renderPartial = true;
+ }
+ lines = strongLines.concat(weakLines);
  lines.renderPartial = renderPartial;
  lines.renderMs = Math.round(analysisNowMs() - renderStarted);
  if (lines.length && typeof console !== 'undefined' && console.debug) {
@@ -2971,7 +3003,7 @@ function zanderBreakStrongAt(a, x, y) {
  return false;
  }
 
- function addZanderBreakRidgeFallbacks(a, lines, minLenM, shouldStop) {
+	 function addZanderBreakRidgeFallbacks(a, lines, minLenM, shouldStop) {
  if (!a || !a.zanderBreak || !a.zanderBreak.strong) return;
  var total = a.nx * a.ny;
  var ridgeMask = new Uint8Array(total);
@@ -2995,6 +3027,7 @@ function zanderBreakStrongAt(a, x, y) {
  px: x + 0.5,
  py: y + 0.5,
  score: zanderBreakCellScore(a, x, y),
+ strength: zanderBreakStrengthAt(a, x, y),
  high: zanderBreakHighAt(a, x, y)
  });
  for (var oy = -1; oy <= 1; oy++) {
@@ -3014,11 +3047,11 @@ function zanderBreakStrongAt(a, x, y) {
  return component;
  }
  var proximityM = Math.max(80, a.cellM * 1.2);
- for (i = 0; i < total && lines.length < ZANDER_BREAK_MAX_LINES; i++) {
+ for (i = 0; i < total && lines.filter(function (line) { return !line.lowConfidence; }).length < ZANDER_BREAK_MAX_STRONG_LINES; i++) {
  if (shouldStop && shouldStop()) break;
  if (!ridgeMask[i] || visited[i]) continue;
  fallbackComponents++;
- if (fallbackComponents > ZANDER_BREAK_MAX_LINES) break;
+ if (fallbackComponents > ZANDER_BREAK_MAX_STRONG_LINES) break;
  var component = collectComponent(i);
  if (component.length < 2) continue;
  var traced = zanderBreakTraceComponent(a, component, ridgeMask);
@@ -3029,10 +3062,12 @@ function zanderBreakStrongAt(a, x, y) {
  if (lenM < minLenM) continue;
  if (zanderBreakLineNearExisting(latlngs, lines, proximityM)) continue;
  var score = 0;
- var high = false;
+ var highCount = 0;
+ var weakCount = 0;
  traced.forEach(function (p) {
  score = Math.max(score, p.score || 0);
- high = high || !!p.high;
+ if ((p.strength || 0) > 1) highCount++;
+ else if ((p.strength || 0) === 1) weakCount++;
  });
  lines.push({
  latlngs: latlngs,
@@ -3042,12 +3077,85 @@ function zanderBreakStrongAt(a, x, y) {
  rawTurnDeg: maxTurnAngleDeg(rawLatLngs),
  segments: traced.length - 1,
  fallback: true,
- lowConfidence: !high
+ lowConfidence: weakCount > 0 && weakCount >= highCount
  });
- }
- }
+	 }
+	 }
 
- function isIndexVisibleCell(a, x, y) {
+	 function addZanderBreakCandidateFallbacks(a, lines, minLenM, shouldStop) {
+	 if (!a || !a.zanderBreak || !a.zanderBreak.strong) return;
+	 var total = a.nx * a.ny;
+	 var ridgeMask = new Uint8Array(total);
+	 var visited = new Uint8Array(total);
+	 var added = 0;
+	 for (var i = 0; i < total; i++) {
+	 ridgeMask[i] = a.mask[i] && a.zanderBreak.strong[i] === 1 ? 1 : 0;
+	 }
+	 function collectComponent(startIdx) {
+	 var stack = [startIdx];
+	 var component = [];
+	 visited[startIdx] = 1;
+	 while (stack.length) {
+	 var idx = stack.pop();
+	 var x = idx % a.nx;
+	 var y = Math.floor(idx / a.nx);
+	 component.push({
+	 x: x,
+	 y: y,
+	 idx: idx,
+	 px: x + 0.5,
+	 py: y + 0.5,
+	 score: zanderBreakCellScore(a, x, y),
+	 strength: 1,
+	 high: false
+	 });
+	 for (var oy = -1; oy <= 1; oy++) {
+	 for (var ox = -1; ox <= 1; ox++) {
+	 if (!ox && !oy) continue;
+	 var nx = x + ox;
+	 var ny = y + oy;
+	 if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) continue;
+	 var nIdx = ny * a.nx + nx;
+	 if (visited[nIdx] || !ridgeMask[nIdx]) continue;
+	 if (!zanderBreakCanStep(a, ridgeMask, { x: x, y: y }, nx, ny, ox, oy)) continue;
+	 visited[nIdx] = 1;
+	 stack.push(nIdx);
+	 }
+	 }
+	 }
+	 return component;
+	 }
+	 var proximityM = Math.max(8, a.cellM * 0.08);
+	 for (i = 0; i < total && added < ZANDER_BREAK_MAX_WEAK_LINES; i++) {
+	 if (shouldStop && shouldStop()) break;
+	 if (!ridgeMask[i] || visited[i]) continue;
+	 var component = collectComponent(i);
+	 if (component.length < 2) continue;
+	 var traced = zanderBreakTraceComponent(a, component, ridgeMask);
+	 if (!traced || traced.length < 2) continue;
+	 var rawLatLngs = capZanderBreakLinePoints(traced.map(function (p) { return zanderBreakSegmentLatLng(a, p); }));
+	 var latlngs = douglasPeuckerLatLngs(rawLatLngs, Math.min(8, a.cellM * 0.18));
+	 var lenM = zanderBreakLineLengthM(latlngs);
+	 if (lenM < minLenM) continue;
+	 if (zanderBreakLineNearExisting(latlngs, lines, proximityM)) continue;
+	 var score = 0;
+	 traced.forEach(function (p) { score = Math.max(score, p.score || 0); });
+	 lines.push({
+	 latlngs: latlngs,
+	 score: score,
+	 lenM: lenM,
+	 maxTurnDeg: maxTurnAngleDeg(latlngs),
+	 rawTurnDeg: maxTurnAngleDeg(rawLatLngs),
+	 segments: traced.length - 1,
+	 fallback: true,
+	 candidateFallback: true,
+	 lowConfidence: true
+	 });
+	 added++;
+	 }
+	 }
+
+	 function isIndexVisibleCell(a, x, y) {
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
  return !!(a.mask[idx] && a.score[idx] >= SCORE_WEIGHTS.minScoreToShow);
@@ -3201,22 +3309,29 @@ function zanderBreakStrongAt(a, x, y) {
  candidates: a.zanderBreak.candidateCount || 0,
  grid: a.nx + 'x' + a.ny
  });
- var lines = a._zanderBreakPolylines || buildZanderBreakPolylines(a);
- a._zanderBreakPolylines = lines;
- pushAnalysisLog('render:zander-lines', {
- ms: Math.round(analysisNowMs() - buildStart),
- lines: lines.length,
- partial: lines.renderPartial ? 1 : 0
- });
+	 var lines = a._zanderBreakPolylines || buildZanderBreakPolylines(a);
+	 a._zanderBreakPolylines = lines;
+	 var weakLines = lines.filter(function (line) { return !!line.lowConfidence; }).length;
+ var strongLines = lines.length - weakLines;
+	 pushAnalysisLog('render:zander-lines', {
+	 ms: Math.round(analysisNowMs() - buildStart),
+	 lines: lines.length,
+ strongLines: strongLines,
+	 weakLines: weakLines,
+	 partial: lines.renderPartial ? 1 : 0
+	 });
  if (!lines.length) return;
  var addStart = analysisNowMs();
- for (var i = 0; i < lines.length; i++) {
- var line = lines[i];
- var weight = line.lowConfidence ? Math.max(2, Math.min(3.5, 1.6 + line.score * 2.2)) : Math.max(2, Math.min(5, 2 + line.score * 3));
+ var renderLines = lines.filter(function (line) { return !line.lowConfidence; })
+ .concat(lines.filter(function (line) { return !!line.lowConfidence; }));
+ for (var i = 0; i < renderLines.length; i++) {
+ var line = renderLines[i];
+ var weight = line.lowConfidence ? Math.max(3, Math.min(4.5, 2.4 + line.score * 2.4)) : Math.max(2, Math.min(5, 2 + line.score * 3));
  L.polyline(line.latlngs, {
- color: line.lowConfidence ? '#f59e0b' : zanderBreakCssColor(line.score),
+ color: line.lowConfidence ? '#ff9f1c' : zanderBreakCssColor(line.score),
  weight: weight,
- opacity: line.lowConfidence ? 0.72 : 0.86,
+ opacity: line.lowConfidence ? 0.95 : 0.86,
+ dashArray: line.lowConfidence ? '7 5' : null,
  lineCap: 'round',
  lineJoin: 'round',
  smoothFactor: 1.5,
@@ -3329,6 +3444,7 @@ function zanderBreakStrongAt(a, x, y) {
 
  function analysisCellM() {
  var z = map.getZoom();
+ if (map.hasLayer(zanderBreakLayer) && z >= 13) return 50;
  return z >= 14 ? 50 : z >= 13 ? 100 : 200;
  }
 
@@ -3527,7 +3643,8 @@ function storeAnalysisResult(key, result, paramsKey) {
 	 if (stageLabel && p.key) source += ', ' + stageLabel + ' ' + p.key;
 	 setDepthStatus('Syvyystiilet ' + p.done + '/' + p.total + ' (' + source + ')…');
 	 }
- });
+
+	 });
  pushAnalysisLog('worker:response', {
  msWorker: Math.round(analysisNowMs() - workerStart),
  cached: res.cached ? 1 : 0,

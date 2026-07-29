@@ -2,7 +2,7 @@
   "name": "Kalastusplotteri",
   "short_name": "Plotteri",
   "description": "Kalastusplotteri kartalla, reiteilla, kalapaikoilla ja saakerroksilla.",
-  "start_url": "./?v=20260729-zander-render-guard-1",
+  "start_url": "./?v=20260729-zander-layer-balance-1",
   "scope": ".",
   "display": "standalone",
   "orientation": "portrait",
