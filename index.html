@@ -614,7 +614,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-worker-stall-retry-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-layer-reuse-1';
 
 (async function () {
  'use strict';
@@ -1961,7 +1961,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
- var APP_BUILD_ID = '20260729-worker-stall-retry-1';
+ var APP_BUILD_ID = '20260729-layer-reuse-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
@@ -1970,6 +1970,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var depthBuildSeq = 0;
  var lastAnalysis = null;
  var indexOverlay = null;
+ var indexOverlayAnalysis = null;
+ var zanderBreakOverlayAnalysis = null;
  var lastDepthTrimAt = 0;
  var depthProbeTimer = null;
  var depthProbeInFlight = false;
@@ -2436,10 +2438,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  fishIndexLayer.removeLayer(indexOverlay);
  indexOverlay = null;
  }
+ indexOverlayAnalysis = null;
  }
 
  function clearZanderBreakOverlay() {
  zanderBreakLayer.clearLayers();
+ zanderBreakOverlayAnalysis = null;
  }
 
  function lerpColor(c1, c2, t) {
@@ -2974,7 +2978,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
 
  function drawIndexOverlay(a) {
+ if (indexOverlay && indexOverlayAnalysis === a) return;
  var scale = 8;
+ var url = a._indexOverlayUrl;
+ if (!url) {
  var range = scoreColorRange(a);
  var canvas = document.createElement('canvas');
  canvas.width = a.nx * scale;
@@ -2999,7 +3006,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  }
  ctx.putImageData(img, 0, 0);
- var url = canvas.toDataURL();
+ url = canvas.toDataURL();
+ a._indexOverlayUrl = url;
+ }
  var overlayBounds = L.latLngBounds([[a.south, a.west], [a.north, a.east]]);
  if (indexOverlay) {
  indexOverlay.setUrl(url);
@@ -3008,6 +3017,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  indexOverlay = L.imageOverlay(url, overlayBounds, { opacity: 0.9, interactive: false, className: 'fish-index-image' });
  indexOverlay.addTo(fishIndexLayer);
  }
+ indexOverlayAnalysis = a;
  }
 
  function drawZanderBreakOverlay(a) {
@@ -3015,6 +3025,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  clearZanderBreakOverlay();
  return;
  }
+ if (zanderBreakOverlayAnalysis === a) return;
  clearZanderBreakOverlay();
  var lines = a._zanderBreakPolylines || buildZanderBreakPolylines(a);
  a._zanderBreakPolylines = lines;
@@ -3033,6 +3044,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  className: 'zander-break-line'
  }).addTo(zanderBreakLayer);
  }
+ zanderBreakOverlayAnalysis = a;
  updateDebugOverlay();
  }
 
@@ -3191,10 +3203,46 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return hit.result;
  }
 
- function storeAnalysisResult(key, result) {
+ function boundsCoveredByAnalysis(a, bounds) {
+ if (!a || !bounds) return false;
+ return bounds.getWest() >= a.west &&
+ bounds.getEast() <= a.east &&
+ bounds.getSouth() >= a.south &&
+ bounds.getNorth() <= a.north;
+ }
+
+ function cachedAnalysisForView(cellM, paramsKey) {
+ var vb = map.getBounds();
+ var best = null;
+ var bestArea = Infinity;
+ analysisResultCache.forEach(function (hit, key) {
+ if (!hit || !hit.result) return;
+ if (Date.now() - hit.t > ANALYSIS_RESULT_TTL_MS) {
+ analysisResultCache.delete(key);
+ return;
+ }
+ var a = hit.result;
+ if (!a.hasData || a.reqCellM !== cellM || a._analysisParamsKey !== paramsKey) return;
+ if (!boundsCoveredByAnalysis(a, vb)) return;
+ var area = Math.abs((a.east - a.west) * (a.north - a.south));
+ if (area < bestArea) {
+ bestArea = area;
+ best = { key: key, hit: hit };
+ }
+ });
+ if (!best) return null;
+ analysisResultCache.delete(best.key);
+ analysisResultCache.set(best.key, best.hit);
+ best.hit.result._analysisCacheHit = true;
+ best.hit.result._analysisCacheKey = best.key;
+ return best.hit.result;
+ }
+
+ function storeAnalysisResult(key, result, paramsKey) {
  if (!key || !result) return;
  result._analysisCacheHit = false;
  result._analysisCacheKey = key;
+ if (paramsKey) result._analysisParamsKey = paramsKey;
  analysisResultCache.set(key, { t: Date.now(), result: result });
  while (analysisResultCache.size > ANALYSIS_RESULT_MAX_ENTRIES) {
  analysisResultCache.delete(analysisResultCache.keys().next().value);
@@ -3220,6 +3268,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var snap = snapAnalysisBounds(bounds, cellM || analysisCellM());
  var sp = speciesBuildParams((snap.south + snap.north) / 2, (snap.west + snap.east) / 2);
  var analysisCacheKey = analysisCacheKeyFromSnap(snap, sp);
+ var currentParamsKey = analysisParamsKey();
  pushAnalysisLog('build:snap', {
  west: snap.west.toFixed(5),
  south: snap.south.toFixed(5),
@@ -3233,6 +3282,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var cachedAnalysis = loadCachedAnalysisResult(analysisCacheKey);
  if (cachedAnalysis) {
  depthTileProgress = null;
+ cachedAnalysis._analysisParamsKey = currentParamsKey;
  pushAnalysisLog('cache:memory-hit', {
  grid: cachedAnalysis.nx + 'x' + cachedAnalysis.ny,
  points: cachedAnalysis.pointCount || 0,
@@ -3269,20 +3319,29 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return;
  }
  }
- depthTileProgress = {
- done: p.done || 0,
- total: p.total || 0,
- mem: p.mem || 0,
- disk: p.disk || 0,
- fetch: p.fetch || 0,
- wait: p.wait || 0
- };
- pushAnalysisLog('worker:tile-progress', depthTileProgress);
- if (p.total > 1) {
- var source = 'mem ' + depthTileProgress.mem + ', levy ' + depthTileProgress.disk + ', verkko ' + depthTileProgress.fetch;
- if (depthTileProgress.wait) source += ', odottaa ' + depthTileProgress.wait;
- setDepthStatus('Syvyystiilet ' + p.done + '/' + p.total + ' (' + source + ')…');
- }
+	 depthTileProgress = {
+	 done: p.done || 0,
+	 total: p.total || 0,
+	 mem: p.mem || 0,
+	 disk: p.disk || 0,
+	 fetch: p.fetch || 0,
+	 wait: p.wait || 0,
+	 event: p.event || '',
+	 key: p.key || ''
+	 };
+	 pushAnalysisLog('worker:tile-progress', depthTileProgress);
+	 if (p.total > 1) {
+	 var source = 'mem ' + depthTileProgress.mem + ', levy ' + depthTileProgress.disk + ', verkko ' + depthTileProgress.fetch;
+	 if (depthTileProgress.wait) source += ', odottaa ' + depthTileProgress.wait;
+	 var stageLabel = '';
+	 if (p.event === 'tile:start') stageLabel = 'käsitellään';
+	 else if (p.event === 'tile:disk-read') stageLabel = 'luetaan levyä';
+	 else if (p.event === 'tile:disk-bypass') stageLabel = 'ohitetaan levycache';
+	 else if (p.event === 'tile:disk-error') stageLabel = 'levycache virhe';
+	 else if (p.event === 'tile:network-start') stageLabel = 'haetaan verkosta';
+	 if (stageLabel && p.key) source += ', ' + stageLabel + ' ' + p.key;
+	 setDepthStatus('Syvyystiilet ' + p.done + '/' + p.total + ' (' + source + ')…');
+	 }
  });
  pushAnalysisLog('worker:response', {
  msWorker: Math.round(analysisNowMs() - workerStart),
@@ -3301,7 +3360,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  res.result.reqCellM = snap.cellM;
  res.result.sources = res.sources || [];
  res.result._analysisDebug = res.debug || null;
- storeAnalysisResult(analysisCacheKey, res.result);
+ storeAnalysisResult(analysisCacheKey, res.result, currentParamsKey);
  if (res.cached) res.result._analysisCacheHit = true;
  }
  return res.result;
@@ -3374,7 +3433,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (a) {
  a.reqCellM = snap.cellM;
  a.sources = [];
- storeAnalysisResult(analysisCacheKey, a);
+ storeAnalysisResult(analysisCacheKey, a, currentParamsKey);
  }
  return a;
  }
@@ -3525,6 +3584,39 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  renderBreakMs: reuseBreakMs
  }, reuseLogRunId);
  return lastAnalysis.hasData ? lastAnalysis : null;
+ }
+ var reusableAnalysis = cachedAnalysisForView(analysisCellM(), analysisParamsKey());
+ if (reusableAnalysis) {
+ lastAnalysis = reusableAnalysis;
+ lastAnalysisParamsKey = analysisParamsKey();
+ beginAnalysisLogRun({
+ mode: 'reuse-memory-analysis',
+ zoom: map.getZoom(),
+ cellM: analysisCellM(),
+ species: currentSpeciesKey()
+ });
+ var memoryReuseLogRunId = activeAnalysisRun ? activeAnalysisRun.id : null;
+ pushAnalysisLog('cache:covered-view-hit', {
+ key: reusableAnalysis._analysisCacheKey || '',
+ grid: reusableAnalysis.nx + 'x' + reusableAnalysis.ny,
+ points: reusableAnalysis.pointCount || 0
+ });
+ var memoryReuseRenderStart = analysisNowMs();
+ if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(reusableAnalysis); else clearIndexOverlay();
+ var memoryReuseIndexMs = Math.round(analysisNowMs() - memoryReuseRenderStart);
+ var memoryReuseBreakStart = analysisNowMs();
+ if (map.hasLayer(zanderBreakLayer)) drawZanderBreakOverlay(reusableAnalysis); else clearZanderBreakOverlay();
+ var memoryReuseBreakMs = Math.round(analysisNowMs() - memoryReuseBreakStart);
+ setCompletedAnalysisStatus(reusableAnalysis);
+ updateMapDepthHud();
+ finishAnalysisLogRun('run:finish', {
+ mode: 'reuse-memory-analysis',
+ hasData: reusableAnalysis.hasData ? 1 : 0,
+ grid: reusableAnalysis.nx + 'x' + reusableAnalysis.ny,
+ renderIndexMs: memoryReuseIndexMs,
+ renderBreakMs: memoryReuseBreakMs
+ }, memoryReuseLogRunId);
+ return reusableAnalysis.hasData ? reusableAnalysis : null;
  }
  var bounds = map.getBounds().pad(0.2);
  var keys = depthTileKeysForBounds(bounds);

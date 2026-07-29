@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-worker-stall-retry-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-layer-reuse-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -259,6 +259,7 @@ async function fetchWithTimeout(url) {
 
 async function getTile(key, stats, opts) {
   var bypassDiskCache = opts && opts.bypassDiskCache;
+  var onStage = opts && opts.onStage;
   var mem = memTiles.get(key);
   if (mem && Date.now() - mem.t < TILE_TTL_MS) {
     if (stats) stats.mem++;
@@ -273,8 +274,10 @@ async function getTile(key, stats, opts) {
   var promise = (async function () {
     if (bypassDiskCache) {
       addStatsEvent(stats, 'tile:disk-bypass', { key: key });
+      if (onStage) onStage('tile:disk-bypass', { key: key });
     } else {
       try {
+        if (onStage) onStage('tile:disk-read', { key: key });
         var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
         if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
           putMem(key, cached.value);
@@ -284,8 +287,10 @@ async function getTile(key, stats, opts) {
         }
       } catch (e) {
         addStatsEvent(stats, 'tile:disk-error', { key: key, error: String(e && e.message || e) });
+        if (onStage) onStage('tile:disk-error', { key: key, error: String(e && e.message || e) });
       }
     }
+    if (onStage) onStage('tile:network-start', { key: key });
     var tile = await fetchTile(key, stats);
     if (stats) stats.fetch++;
     putMem(key, tile);
@@ -307,20 +312,35 @@ async function ensureTiles(keys, onProgress, opts) {
   var queue = keys.slice();
   var done = 0;
   var stats = { mem: 0, disk: 0, fetch: 0, wait: 0, events: [], errors: [] };
-  async function work() {
+  function progress(data) {
+    if (!onProgress) return;
+    onProgress(Object.assign({
+      done: done,
+      total: keys.length,
+      mem: stats.mem,
+      disk: stats.disk,
+      fetch: stats.fetch,
+      wait: stats.wait
+    }, data || {}));
+  }
+  async function work(workerIndex) {
     while (queue.length) {
       var key = queue.shift();
+      addStatsEvent(stats, 'tile:start', { key: key, worker: workerIndex });
+      progress({ event: 'tile:start', key: key, worker: workerIndex });
       try {
-        results.push(await getTile(key, stats, opts));
+        results.push(await getTile(key, stats, Object.assign({}, opts || {}, {
+          onStage: function (event, data) { progress(Object.assign({ event: event }, data || {})); }
+        })));
       } catch (e) {
         addStatsEvent(stats, 'tile:error', { key: key, error: String(e && e.message || e) });
         console.warn('Syvyystiilen haku epäonnistui:', key, e);
       }
       done++;
-      if (onProgress) onProgress(done, keys.length, stats);
+      progress();
     }
   }
-  await Promise.all([work(), work(), work()]);
+  await Promise.all([work(1), work(2), work(3)]);
   return { tiles: results, stats: stats };
 }
 
@@ -357,15 +377,8 @@ async function handleBuild(msg) {
   var keys = tileKeysForBounds(msg);
   if (keys.length > MAX_TILES) return { result: null, reason: 'toowide' };
   var fetchStarted = Date.now();
-  var tileResult = await ensureTiles(keys, function (done, total, stats) {
-    self.postMessage({ id: msg.id, progress: {
-      done: done,
-      total: total,
-      mem: stats.mem,
-      disk: stats.disk,
-      fetch: stats.fetch,
-      wait: stats.wait
-    } });
+  var tileResult = await ensureTiles(keys, function (progress) {
+    self.postMessage({ id: msg.id, progress: progress });
   }, { bypassDiskCache: !!msg.bypassDiskCache });
   var tiles = tileResult.tiles;
   var stats = tileResult.stats || {};
