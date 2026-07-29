@@ -2,7 +2,7 @@
   "name": "Kalastusplotteri",
   "short_name": "Plotteri",
   "description": "Kalastusplotteri kartalla, reiteilla, kalapaikoilla ja saakerroksilla.",
-  "start_url": "./?v=20260729-zander-ridge-fallback-1",
+  "start_url": "./?v=20260729-depth-grid-guard-1",
   "scope": ".",
   "display": "standalone",
   "orientation": "portrait",

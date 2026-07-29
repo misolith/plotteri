@@ -495,6 +495,7 @@ function maxDepthWithin(depth, mask, nx, ny, cellM, meters) {
 function buildZanderBreakLayer(params) {
   var MAX_ZANDER_BREAK_RUN_M = 550;
   var MIN_ZANDER_BREAK_GRAD = 0.025;
+  var MIN_ZANDER_BREAK_CANDIDATE_GRAD = 0.018;
   var MIN_ZANDER_BREAK_OVERLAP = 0.35;
   var MIN_ZANDER_BREAK_DROP_TERM = 0.3;
   var MIN_ZANDER_BREAK_REFUGE = 0.15;
@@ -525,6 +526,7 @@ function buildZanderBreakLayer(params) {
   var centerSigned = new Float32Array(params.nx * params.ny);
   var values = [];
   var strongCount = 0;
+  var candidateCount = 0;
   var deepMax = maxDepthWithin(params.depth, params.mask, params.nx, params.ny, params.cellM, 300);
   var effShift = (params.lightShiftM || 0) * (SPECIES_TRAITS.kuha.lightSens || 1);
   var traits = SPECIES_TRAITS.kuha;
@@ -582,9 +584,10 @@ function buildZanderBreakLayer(params) {
     pairHi[idx] = bestHi.d;
     centerSigned[idx] = bestCenterSigned;
     values.push(bestRaw);
-    if (bestGrad >= MIN_ZANDER_BREAK_GRAD) {
-      strong[idx] = 1;
-      strongCount++;
+    if (bestGrad >= MIN_ZANDER_BREAK_CANDIDATE_GRAD) {
+      strong[idx] = bestGrad >= MIN_ZANDER_BREAK_GRAD ? 2 : 1;
+      candidateCount++;
+      if (strong[idx] > 1) strongCount++;
     }
   }
   var p50 = percentileFromValues(values.slice(), 0.50) || 0;
@@ -607,6 +610,7 @@ function buildZanderBreakLayer(params) {
     p50: p50,
     p95: p95,
     strongCount: strongCount,
+    candidateCount: candidateCount,
     levelCount: levelData.length,
     hasAny: hasAny
   };
@@ -750,26 +754,88 @@ export function buildAnalysis(input) {
   var useBands = bands.length > 0;
   var depth = new Float32Array(nx * ny);
   var mask = new Uint8Array(nx * ny);
+  var bandRows = null;
+  var maxRowBands = 0;
+  var bandRowRefs = 0;
+  if (useBands) {
+    bandRows = new Array(ny);
+    bands.forEach(function (band) {
+      var bb = band.bbox;
+      if (!bb) return;
+      var y0 = Math.max(0, Math.floor((bb[1] - south) / cellLat) - 1);
+      var y1 = Math.min(ny - 1, Math.floor((bb[3] - south) / cellLat) + 1);
+      if (y1 < 0 || y0 >= ny) return;
+      for (var y = y0; y <= y1; y++) {
+        var row = bandRows[y];
+        if (!row) row = bandRows[y] = [];
+        row.push(band);
+        bandRowRefs++;
+        if (row.length > maxRowBands) maxRowBands = row.length;
+      }
+    });
+    emitDebug('analysis:band-index', {
+      bands: bands.length,
+      rowRefs: bandRowRefs,
+      maxRowBands: maxRowBands
+    });
+  }
+  var depthStarted = nowMs();
+  var depthBudgetMs = input.depthGridBudgetMs || 15000;
+  var depthGridPartial = false;
+  var waterCells = 0;
+  var bandChecks = 0;
+  var progressEveryRows = Math.max(4, Math.floor(ny / 8));
   for (var gy = 0; gy < ny; gy++) {
+    var rowBands = useBands ? (bandRows[gy] || []) : null;
     for (var gx = 0; gx < nx; gx++) {
       var lon = west + (gx + 0.5) * cellLon;
       var lat = south + (gy + 0.5) * cellLat;
       var idx = gy * nx + gx;
       var inWater = !useBands;
       if (useBands) {
-        for (var b = 0; b < bands.length; b++) {
-          var bb = bands[b].bbox;
+        for (var b = 0; b < rowBands.length; b++) {
+          var bb = rowBands[b].bbox;
           if (lon < bb[0] || lon > bb[2] || lat < bb[1] || lat > bb[3]) continue;
-          if (pointInRings(lon, lat, bands[b].rings)) { inWater = true; break; }
+          bandChecks++;
+          if (pointInRings(lon, lat, rowBands[b].rings)) { inWater = true; break; }
         }
       }
       if (!inWater) { depth[idx] = NaN; continue; }
+      waterCells++;
       var d = idw(lon, lat);
       depth[idx] = d;
       if (!isNaN(d)) mask[idx] = 1;
     }
+    if (debug && ((gy + 1) % progressEveryRows === 0 || gy === ny - 1)) {
+      emitDebug('analysis:depth-grid-progress', {
+        rows: gy + 1,
+        totalRows: ny,
+        cells: (gy + 1) * nx,
+        water: waterCells,
+        bandChecks: bandChecks,
+        elapsedMs: Math.round(nowMs() - depthStarted)
+      });
+    }
+    if (nowMs() - depthStarted > depthBudgetMs) {
+      depthGridPartial = true;
+      emitDebug('analysis:depth-grid-budget', {
+        rows: gy + 1,
+        totalRows: ny,
+        cells: (gy + 1) * nx,
+        water: waterCells,
+        bandChecks: bandChecks,
+        budgetMs: depthBudgetMs
+      });
+      break;
+    }
   }
-  emitDebug('analysis:depth-grid', { cells: nx * ny });
+  emitDebug('analysis:depth-grid', {
+    cells: nx * ny,
+    water: waterCells,
+    bandChecks: bandChecks,
+    partial: depthGridPartial ? 1 : 0,
+    elapsedMs: Math.round(nowMs() - depthStarted)
+  });
 
   // 4) gradientti erotusosamaaralla
   var slope = new Float32Array(nx * ny);
@@ -943,7 +1009,8 @@ export function buildAnalysis(input) {
   emitDebug('analysis:zander-break', {
     enabled: input.includeZanderBreak === false ? 0 : 1,
     levels: zanderBreak && zanderBreak.levelCount ? zanderBreak.levelCount : 0,
-    strong: zanderBreak && zanderBreak.strongCount ? zanderBreak.strongCount : 0
+    strong: zanderBreak && zanderBreak.strongCount ? zanderBreak.strongCount : 0,
+    candidates: zanderBreak && zanderBreak.candidateCount ? zanderBreak.candidateCount : 0
   });
 
   return {
@@ -951,6 +1018,7 @@ export function buildAnalysis(input) {
     cellM: cellM, cellLon: cellLon, cellLat: cellLat,
     depth: depth, mask: mask, slope: slope, windExp: windExp, score: score,
     zanderBreak: zanderBreak,
+    depthGridPartial: depthGridPartial,
     windScale: windScale, pointCount: points.length,
     hasData: true, hasScore: hasAny
   };

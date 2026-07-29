@@ -12,7 +12,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json?v=20260729-zander-ridge-fallback-1">
+<link rel="manifest" href="manifest.json?v=20260729-depth-grid-guard-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -617,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-zander-ridge-fallback-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-depth-grid-guard-1';
 
 (async function () {
  'use strict';
@@ -1965,7 +1965,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
+var APP_BUILD_ID = '20260729-depth-grid-guard-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
@@ -2138,7 +2138,10 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  if (map.hasLayer(zanderBreakLayer) && lastAnalysis.zanderBreak) {
  var z = lastAnalysis.zanderBreak;
  var lineCount = lastAnalysis._zanderBreakPolylines ? lastAnalysis._zanderBreakPolylines.length : '-';
- parts.push('<span>kuha ' + (z.strongCount || 0) + ' / lines ' + lineCount + '</span>');
+ var candidateSuffix = z.candidateCount && z.candidateCount > (z.strongCount || 0)
+ ? ' +' + (z.candidateCount - (z.strongCount || 0)) + ' ehd.'
+ : '';
+ parts.push('<span>kuha ' + (z.strongCount || 0) + candidateSuffix + ' / lines ' + lineCount + '</span>');
  if (z.p95 > 0) parts.push('<span>p50/p95 ' + z.p50.toFixed(3) + '/' + z.p95.toFixed(3) + '</span>');
  }
  }
@@ -2528,11 +2531,18 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  return a.zanderBreak.edge[y * a.nx + x] || 0;
  }
 
- function zanderBreakStrongAt(a, x, y) {
+function zanderBreakStrongAt(a, x, y) {
  if (!a || !a.zanderBreak || !a.zanderBreak.strong) return false;
  if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
  var idx = y * a.nx + x;
  return !!(a.mask[idx] && a.zanderBreak.strong[idx]);
+ }
+
+ function zanderBreakHighAt(a, x, y) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.strong) return false;
+ if (x < 0 || y < 0 || x >= a.nx || y >= a.ny) return false;
+ var idx = y * a.nx + x;
+ return !!(a.mask[idx] && a.zanderBreak.strong[idx] > 1);
  }
 
  function zanderBreakPairMatches(a, idx, nIdx) {
@@ -2571,13 +2581,13 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var px = x + 0.5 + (nx - x) * t;
  var py = y + 0.5 + (ny - y) * t;
  var score = Math.max(zanderBreakCellScore(a, x, y), zanderBreakCellScore(a, nx, ny));
- var candidate = { x: x, y: y, idx: idx, px: px, py: py, score: score, dir: dir };
+ var candidate = { x: x, y: y, idx: idx, px: px, py: py, score: score, high: zanderBreakHighAt(a, x, y) || zanderBreakHighAt(a, nx, ny), dir: dir };
  if (!best || candidate.score > best.score) best = candidate;
  }
  consider(x + 1, y, 'right');
  consider(x, y + 1, 'up');
  if (!best && strong0 && s0 === 0) {
- best = { x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5, score: zanderBreakCellScore(a, x, y), dir: 'zero' };
+ best = { x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5, score: zanderBreakCellScore(a, x, y), high: zanderBreakHighAt(a, x, y), dir: 'zero' };
  }
  return best;
  }
@@ -2681,7 +2691,7 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  if (!isFinite(s)) return null;
  return {
  x: x, y: y, idx: idx, px: x + 0.5, py: y + 0.5,
- s: s, strong: zanderBreakStrongAt(a, x, y), score: zanderBreakCellScore(a, x, y)
+ s: s, strong: zanderBreakStrongAt(a, x, y), high: zanderBreakHighAt(a, x, y), score: zanderBreakCellScore(a, x, y)
  };
  }
 
@@ -2696,7 +2706,8 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  px: c0.px + (c1.px - c0.px) * t,
  py: c0.py + (c1.py - c0.py) * t,
  score: Math.max(c0.score, c1.score),
- strong: c0.strong || c1.strong
+ strong: c0.strong || c1.strong,
+ high: c0.high || c1.high
  };
  }
 
@@ -2745,7 +2756,7 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var idx = y * a.nx + x;
  if (onlySet && !compSet.has(idx)) continue;
  if (!zanderBreakCanStep(a, ridgeMask, cell, x, y, ox, oy)) continue;
- out.push(zanderBreakCenterCrossing(a, x, y) || { x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y) });
+ out.push(zanderBreakCenterCrossing(a, x, y) || { x: x, y: y, idx: idx, score: zanderBreakCellScore(a, x, y), high: zanderBreakHighAt(a, x, y) });
  }
  }
  return out;
@@ -2785,7 +2796,7 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var k0 = zanderBreakPointKey(p0);
  var k1 = zanderBreakPointKey(p1);
  if (k0 === k1) return;
- segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0) });
+ segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0), high: !!(p0.high || p1.high) });
  }
  for (var y = 0; y < a.ny - 1; y++) {
  for (var x = 0; x < a.nx - 1; x++) {
@@ -2857,6 +2868,7 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var other = segmentOther(seg, startKey);
  var points = [startPoint, other.point];
  var score = seg.score;
+ var high = !!seg.high;
  used[segIdx] = 1;
  var prevPoint = startPoint;
  var currentPoint = other.point;
@@ -2868,12 +2880,13 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  used[nextIdx] = 1;
  points.push(next.point);
  score = Math.max(score, segments[nextIdx].score);
+ high = high || !!segments[nextIdx].high;
  prevPoint = currentPoint;
  currentPoint = next.point;
  currentKey = next.key;
  if (currentKey === startKey) break;
  }
- return { points: points, score: score };
+ return { points: points, score: score, high: high };
  }
  var order = [];
  for (si = 0; si < segments.length; si++) {
@@ -2892,13 +2905,13 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var lenM = zanderBreakLineLengthM(latlngs);
  if (lenM < minLenM) continue;
  var maxTurn = maxTurnAngleDeg(latlngs);
- if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1 });
+ if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1, lowConfidence: !traced.high });
  }
  addZanderBreakRidgeFallbacks(a, lines, minLenM);
  lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
  if (lines.length && typeof console !== 'undefined' && console.debug) {
  console.debug('Kuha käyräväli viivat', lines.map(function (line) {
- return { segments: line.segments, lenM: Math.round(line.lenM), turnRaw: Math.round(line.rawTurnDeg || 0), turnSimplified: Math.round(line.maxTurnDeg), fallback: line.fallback ? 1 : 0, score: Number(line.score.toFixed(3)) };
+ return { segments: line.segments, lenM: Math.round(line.lenM), turnRaw: Math.round(line.rawTurnDeg || 0), turnSimplified: Math.round(line.maxTurnDeg), fallback: line.fallback ? 1 : 0, low: line.lowConfidence ? 1 : 0, score: Number(line.score.toFixed(3)) };
  }));
  }
  return lines;
@@ -2951,7 +2964,8 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  idx: idx,
  px: x + 0.5,
  py: y + 0.5,
- score: zanderBreakCellScore(a, x, y)
+ score: zanderBreakCellScore(a, x, y),
+ high: zanderBreakHighAt(a, x, y)
  });
  for (var oy = -1; oy <= 1; oy++) {
  for (var ox = -1; ox <= 1; ox++) {
@@ -2982,7 +2996,11 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  if (lenM < minLenM) continue;
  if (zanderBreakLineNearExisting(latlngs, lines, proximityM)) continue;
  var score = 0;
- traced.forEach(function (p) { score = Math.max(score, p.score || 0); });
+ var high = false;
+ traced.forEach(function (p) {
+ score = Math.max(score, p.score || 0);
+ high = high || !!p.high;
+ });
  lines.push({
  latlngs: latlngs,
  score: score,
@@ -2990,7 +3008,8 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  maxTurnDeg: maxTurnAngleDeg(latlngs),
  rawTurnDeg: maxTurnAngleDeg(rawLatLngs),
  segments: traced.length - 1,
- fallback: true
+ fallback: true,
+ lowConfidence: !high
  });
  }
  }
@@ -3147,16 +3166,16 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  if (!lines.length) return;
  for (var i = 0; i < lines.length; i++) {
  var line = lines[i];
- var weight = Math.max(2, Math.min(5, 2 + line.score * 3));
+ var weight = line.lowConfidence ? Math.max(2, Math.min(3.5, 1.6 + line.score * 2.2)) : Math.max(2, Math.min(5, 2 + line.score * 3));
  L.polyline(line.latlngs, {
- color: zanderBreakCssColor(line.score),
+ color: line.lowConfidence ? '#f59e0b' : zanderBreakCssColor(line.score),
  weight: weight,
- opacity: 0.86,
+ opacity: line.lowConfidence ? 0.72 : 0.86,
  lineCap: 'round',
  lineJoin: 'round',
  smoothFactor: 1.5,
  interactive: false,
- className: 'zander-break-line'
+ className: line.lowConfidence ? 'zander-break-line zander-break-candidate-line' : 'zander-break-line'
  }).addTo(zanderBreakLayer);
  }
  zanderBreakOverlayAnalysis = a;
@@ -3295,7 +3314,7 @@ var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
 
  function analysisCacheKeyFromSnap(snap, sp) {
  return [
- 'analysis:v7',
+ 'analysis:v9',
  snap.west.toFixed(6), snap.south.toFixed(6), snap.east.toFixed(6), snap.north.toFixed(6),
  snap.cellLon.toFixed(8), snap.cellLat.toFixed(8), snap.cellM,
  windAnalysisKey(), sp.speciesKey,
@@ -3628,6 +3647,8 @@ function storeAnalysisResult(key, result, paramsKey) {
  var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
  var partialStatus = a.partialTiles && a.partialTiles.pending
  ? ', osittainen ' + a.partialTiles.done + '/' + a.partialTiles.total + ' tiiltä'
+ : a.depthGridPartial
+ ? ', osittainen ruudukko'
  : '';
  var zanderBreakStatus = '';
  if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
@@ -3635,7 +3656,10 @@ function storeAnalysisResult(key, result, paramsKey) {
  ? ', edge p50/p95 ' + a.zanderBreak.p50.toFixed(3) + '/' + a.zanderBreak.p95.toFixed(3)
  : '';
  zanderBreakStatus = a.zanderBreak.hasAny
- ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua' + hist
+ ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' vahvaa' +
+ (a.zanderBreak.candidateCount && a.zanderBreak.candidateCount > (a.zanderBreak.strongCount || 0)
+ ? ' + ' + (a.zanderBreak.candidateCount - (a.zanderBreak.strongCount || 0)) + ' ehdokasta'
+ : '') + hist
  : ', ei selkeää kuha-taitetta tässä näkymässä' + hist;
  }
  setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +

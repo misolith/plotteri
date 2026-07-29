@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-zander-ridge-fallback-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-depth-grid-guard-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -22,7 +22,7 @@ var DEPTH_TILE_NETWORK_TIMEOUT_MS = 18000;
 var DEPTH_TILES_SOFT_DEADLINE_MS = 2500;
 var IDB_READ_TIMEOUT_MS = 2500;
 var TILE_CACHE_PREFIX = 't:v4:';
-var RESULT_CACHE_PREFIX = 'r:v8:';
+var RESULT_CACHE_PREFIX = 'r:v10:';
 
 var memTiles = new Map();
 var fetching = new Map();
@@ -458,7 +458,7 @@ async function ensureTiles(keys, onProgress, opts) {
 }
 
 async function handleBuild(msg) {
-  var cacheKey = ['analysis:v7', msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
+  var cacheKey = ['analysis:v9', msg.west, msg.south, msg.east, msg.north, msg.cellLonDeg, msg.windKey,
     msg.speciesKey, Math.round((msg.lightShiftM || 0) * 10),
     Math.round((msg.strat || 0) * 100), Math.round(msg.thermoDepthM || 0),
     msg.includeZanderBreak ? 'zander' : 'base'].join('|');
@@ -566,6 +566,7 @@ async function handleBuild(msg) {
     north: msg.north,
     cellLonDeg: msg.cellLonDeg,
     cellLatDeg: msg.cellLatDeg,
+    depthGridBudgetMs: 12000,
     includeZanderBreak: !!msg.includeZanderBreak,
     onDebug: function (event) {
       addStatsEvent(stats, event.event || 'analysis:phase', event);
@@ -587,7 +588,13 @@ async function handleBuild(msg) {
       pending: stats.pending || 0
     };
   }
-  if (result && result.hasData && !stats.partial) {
+  if (result && result.depthGridPartial) {
+    addStatsEvent(stats, 'analysis:depth-grid-result-not-cached', {
+      grid: result.nx + 'x' + result.ny,
+      points: result.pointCount || 0
+    });
+  }
+  if (result && result.hasData && !stats.partial && !result.depthGridPartial) {
     resultCache.set(cacheKey, { t: Date.now(), result: result, sources: sources });
     while (resultCache.size > RESULT_MAX) resultCache.delete(resultCache.keys().next().value);
     try {
@@ -600,6 +607,8 @@ async function handleBuild(msg) {
           ((result && result.nx && result.ny) ? result.nx * result.ny * (msg.includeZanderBreak ? 40 : 18) : 0)
       }).then(function () { return trimCache(RESULT_CACHE_PREFIX, RESULT_CACHE_MAX_ENTRIES, RESULT_CACHE_MAX_BYTES, RESULT_TTL_MS); }).catch(function () {});
     } catch (e) { /* persistent analysis cache write is best effort */ }
+  } else if (result && result.depthGridPartial) {
+    // Already logged above; partial depth grids are usable for this response but not cache truth.
   } else if (stats.partial) {
     addStatsEvent(stats, 'analysis:partial-result-not-cached', {
       done: tiles.length,
