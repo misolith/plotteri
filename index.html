@@ -117,12 +117,16 @@
  #debug-overlay {
  position: fixed; z-index: 650; left: 10px; right: 10px;
  bottom: calc(84px + env(safe-area-inset-bottom));
- max-width: 980px; margin: 0 auto; pointer-events: none;
+ max-width: 980px; margin: 0 auto; pointer-events: auto;
  display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px;
  background: rgba(5,20,28,0.86); border: 1px solid rgba(95,224,200,0.28);
  border-radius: 8px; padding: 6px 8px;
  color: #9fc0ca; font-size: 10px; line-height: 1.25;
  box-shadow: 0 3px 18px rgba(0,0,0,0.38);
+ }
+ #debug-overlay button {
+ background: #5fe0c8; color: #05141c; border: 0; border-radius: 6px;
+ padding: 3px 7px; font: inherit; font-weight: 700;
  }
  #debug-overlay span {
  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: min(88vw, 460px);
@@ -2101,6 +2105,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var parts = [];
  var pending = analysisWorkerPending ? analysisWorkerPending.size : 0;
  parts.push('<span class="debug-accent">debug</span>');
+ parts.push('<button id="debug-log-copy" type="button">Kopioi loki</button>');
  parts.push('<span>z ' + map.getZoom() + '</span>');
  parts.push('<span>cell ' + analysisCellM() + ' m</span>');
  parts.push('<span>worker ' + (pending ? pending + ' pending' : 'idle') + '</span>');
@@ -2122,6 +2127,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  parts.push('<span>' + escapeHtml(debugShortStatus(depthStatusText)) + '</span>');
  debugOverlay.innerHTML = parts.join('');
+ var debugLogCopy = document.getElementById('debug-log-copy');
+ if (debugLogCopy) debugLogCopy.addEventListener('click', function (e) {
+ e.preventDefault();
+ e.stopPropagation();
+ copyAnalysisDebugLog();
+ });
  debugOverlay.classList.remove('hidden');
  }
 
