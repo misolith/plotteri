@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-depth-grid-guard-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-early-partial-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -407,6 +407,9 @@ async function ensureTiles(keys, onProgress, opts) {
   var queue = keys.slice();
   var done = 0;
   var firstDoneAt = 0;
+  var partialResolved = false;
+  var partialResolve = null;
+  var minCompleteForEarlyPartial = keys.length >= 4 ? keys.length - 1 : keys.length;
   var stats = { mem: 0, disk: 0, fetch: 0, wait: 0, events: [], errors: [] };
   function progress(data) {
     if (!onProgress) return;
@@ -435,17 +438,24 @@ async function ensureTiles(keys, onProgress, opts) {
       done++;
       if (!firstDoneAt) firstDoneAt = Date.now();
       progress();
+      if (!partialResolved && done >= minCompleteForEarlyPartial && done < keys.length &&
+          results.some(tileUsable)) {
+        partialResolved = true;
+        if (partialResolve) partialResolve('partial-ready');
+      }
     }
   }
   var allDone = Promise.all([work(1), work(2)]).then(function () { return 'done'; });
+  var partialReady = new Promise(function (resolve) { partialResolve = resolve; });
   var softDeadline = new Promise(function (resolve) {
     setTimeout(function () { resolve('soft'); }, DEPTH_TILES_SOFT_DEADLINE_MS);
   });
-  var winner = await Promise.race([allDone, softDeadline]);
-  if (winner === 'soft' && results.length && done < keys.length) {
+  var winner = await Promise.race([allDone, partialReady, softDeadline]);
+  if ((winner === 'soft' || winner === 'partial-ready') && results.length && done < keys.length &&
+      results.some(tileUsable)) {
     stats.partial = true;
     stats.pending = keys.length - done;
-    addStatsEvent(stats, 'analysis:tiles-soft-deadline', {
+    addStatsEvent(stats, winner === 'partial-ready' ? 'analysis:tiles-partial-ready' : 'analysis:tiles-soft-deadline', {
       durationMs: firstDoneAt ? Date.now() - firstDoneAt : DEPTH_TILES_SOFT_DEADLINE_MS,
       done: done,
       total: keys.length,
