@@ -3159,6 +3159,28 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  lat >= lastAnalysis.south && lat <= lastAnalysis.north;
  }
 
+ function setCompletedAnalysisStatus(a) {
+ if (!a) return;
+ var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
+ var zanderBreakStatus = '';
+ if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
+ var hist = a.zanderBreak.p95 > 0
+ ? ', edge p50/p95 ' + a.zanderBreak.p50.toFixed(3) + '/' + a.zanderBreak.p95.toFixed(3)
+ : '';
+ zanderBreakStatus = a.zanderBreak.hasAny
+ ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua' + hist
+ : ', ei selkeää kuha-taitetta tässä näkymässä' + hist;
+ }
+ setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
+ (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
+ ', ruudukko ' + a.nx + '×' + a.ny +
+ (a._analysisCacheHit ? ', cache' : '') +
+ (a.zanderBreak && a.zanderBreak.levelCount ? ', kuha-käyriä ' + a.zanderBreak.levelCount + ' tasoa' : '') +
+ zanderBreakStatus +
+ (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
+ (usesTraficom ? ' ' + TRAFICOM_FULL_ATTRIBUTION : ''));
+ }
+
  function scheduleDepthProbe() {
  clearTimeout(depthProbeTimer);
  depthProbeTimer = setTimeout(async function () {
@@ -3194,6 +3216,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  lastAnalysisParamsKey === analysisParamsKey() && analysisCoversView()) {
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(lastAnalysis); else clearIndexOverlay();
  if (map.hasLayer(zanderBreakLayer)) drawZanderBreakOverlay(lastAnalysis); else clearZanderBreakOverlay();
+ setCompletedAnalysisStatus(lastAnalysis);
  updateMapDepthHud();
  return lastAnalysis.hasData ? lastAnalysis : null;
  }
@@ -3220,27 +3243,10 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (map.hasLayer(fishIndexLayer)) showToast('Ei syvyysdataa tässä näkymässä');
  return null;
  }
- var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
- setTraficomAttribution(usesTraficom);
- var zanderBreakStatus = '';
- if (map.hasLayer(zanderBreakLayer) && a.zanderBreak && a.zanderBreak.levelCount) {
- var hist = a.zanderBreak.p95 > 0
- ? ', edge p50/p95 ' + a.zanderBreak.p50.toFixed(3) + '/' + a.zanderBreak.p95.toFixed(3)
- : '';
- zanderBreakStatus = a.zanderBreak.hasAny
- ? ', kuha-taitteita ' + (a.zanderBreak.strongCount || 0) + ' solua' + hist
- : ', ei selkeää kuha-taitetta tässä näkymässä' + hist;
- }
- setDepthStatus('Syvyysdata: ' + a.pointCount + ' pistettä (' +
- (a.sources && a.sources.length ? a.sources.join(' + ') : 'SYKE') + '), laji ' + currentSpeciesKey() +
- ', ruudukko ' + a.nx + '×' + a.ny +
- (a._analysisCacheHit ? ', cache' : '') +
- (a.zanderBreak && a.zanderBreak.levelCount ? ', kuha-käyriä ' + a.zanderBreak.levelCount + ' tasoa' : '') +
- zanderBreakStatus +
- (a.windScale > 0 ? ', tuuli mukana.' : ', ei tuulen vaikutusta (tyyntä tai ei tuulidataa).') +
- (usesTraficom ? ' ' + TRAFICOM_FULL_ATTRIBUTION : ''));
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(a); else clearIndexOverlay();
  if (map.hasLayer(zanderBreakLayer)) drawZanderBreakOverlay(a); else clearZanderBreakOverlay();
+ setTraficomAttribution((a.sources || []).indexOf('Traficom') !== -1);
+ setCompletedAnalysisStatus(a);
  updateMapDepthHud();
  return a;
  }
