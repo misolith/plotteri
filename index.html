@@ -12,7 +12,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json?v=20260729-early-partial-1">
+<link rel="manifest" href="manifest.json?v=20260729-zander-render-guard-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -617,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-early-partial-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-zander-render-guard-1';
 
 (async function () {
  'use strict';
@@ -1965,7 +1965,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260729-early-partial-1';
+var APP_BUILD_ID = '20260729-zander-render-guard-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
@@ -2512,6 +2512,9 @@ var APP_BUILD_ID = '20260729-early-partial-1';
  }
 
  var ZANDER_BREAK_MIN_VISIBLE = 0.34;
+ var ZANDER_BREAK_RENDER_BUDGET_MS = 2500;
+ var ZANDER_BREAK_MAX_LINES = 80;
+ var ZANDER_BREAK_MAX_LINE_POINTS = 260;
 
  function zanderBreakColor(s) {
  var t = Math.max(0, Math.min(1, (s - ZANDER_BREAK_MIN_VISIBLE) / (1 - ZANDER_BREAK_MIN_VISIBLE)));
@@ -2655,6 +2658,17 @@ function zanderBreakStrongAt(a, x, y) {
  return out;
  }
 
+ function capZanderBreakLinePoints(points) {
+ if (!points || points.length <= ZANDER_BREAK_MAX_LINE_POINTS) return points || [];
+ var out = [];
+ var last = points.length - 1;
+ for (var i = 0; i < ZANDER_BREAK_MAX_LINE_POINTS; i++) {
+ var idx = Math.round(i * last / (ZANDER_BREAK_MAX_LINE_POINTS - 1));
+ out.push(points[idx]);
+ }
+ return out;
+ }
+
  function zanderBreakLineLengthM(latlngs) {
  var len = 0;
  for (var i = 1; i < latlngs.length; i++) len += latLngDistanceM(latlngs[i - 1], latlngs[i]);
@@ -2790,6 +2804,13 @@ function zanderBreakStrongAt(a, x, y) {
 
  function buildZanderBreakPolylines(a) {
  if (!a || !a.zanderBreak || !a.zanderBreak.hasAny) return [];
+ var renderStarted = analysisNowMs();
+ var renderPartial = false;
+ function renderBudgetExceeded() {
+ if (analysisNowMs() - renderStarted <= ZANDER_BREAK_RENDER_BUDGET_MS) return false;
+ renderPartial = true;
+ return true;
+ }
  var segments = [];
  function addSegment(p0, p1) {
  if (!p0 || !p1) return;
@@ -2799,6 +2820,7 @@ function zanderBreakStrongAt(a, x, y) {
  segments.push({ a: p0, b: p1, ak: k0, bk: k1, score: Math.max(p0.score || 0, p1.score || 0), high: !!(p0.high || p1.high) });
  }
  for (var y = 0; y < a.ny - 1; y++) {
+ if (renderBudgetExceeded()) break;
  for (var x = 0; x < a.nx - 1; x++) {
  var c0 = zanderBreakCorner(a, x, y);
  var c1 = zanderBreakCorner(a, x + 1, y);
@@ -2895,11 +2917,12 @@ function zanderBreakStrongAt(a, x, y) {
  order.push({ idx: si, endpoint: degA <= 1 ? segments[si].ak : degB <= 1 ? segments[si].bk : segments[si].ak, open: degA <= 1 || degB <= 1 });
  }
  order.sort(function (aOrd, bOrd) { return (aOrd.open === bOrd.open ? 0 : aOrd.open ? -1 : 1); });
- for (var oi = 0; oi < order.length; oi++) {
+ for (var oi = 0; oi < order.length && lines.length < ZANDER_BREAK_MAX_LINES; oi++) {
+ if (renderBudgetExceeded()) break;
  var start = order[oi];
  if (used[start.idx]) continue;
  var traced = traceFrom(start.idx, start.endpoint);
- var rawLatLngs = traced.points.map(function (p) { return zanderBreakSegmentLatLng(a, p); });
+ var rawLatLngs = capZanderBreakLinePoints(traced.points.map(function (p) { return zanderBreakSegmentLatLng(a, p); }));
  var turnRaw = maxTurnAngleDeg(rawLatLngs);
  var latlngs = douglasPeuckerLatLngs(rawLatLngs, Math.min(6, a.cellM * 0.12));
  var lenM = zanderBreakLineLengthM(latlngs);
@@ -2907,8 +2930,14 @@ function zanderBreakStrongAt(a, x, y) {
  var maxTurn = maxTurnAngleDeg(latlngs);
  if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1, lowConfidence: !traced.high });
  }
- addZanderBreakRidgeFallbacks(a, lines, minLenM);
+ if (!renderPartial && lines.length < ZANDER_BREAK_MAX_LINES) addZanderBreakRidgeFallbacks(a, lines, minLenM, renderBudgetExceeded);
  lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
+ if (lines.length > ZANDER_BREAK_MAX_LINES) {
+ lines.length = ZANDER_BREAK_MAX_LINES;
+ renderPartial = true;
+ }
+ lines.renderPartial = renderPartial;
+ lines.renderMs = Math.round(analysisNowMs() - renderStarted);
  if (lines.length && typeof console !== 'undefined' && console.debug) {
  console.debug('Kuha käyräväli viivat', lines.map(function (line) {
  return { segments: line.segments, lenM: Math.round(line.lenM), turnRaw: Math.round(line.rawTurnDeg || 0), turnSimplified: Math.round(line.maxTurnDeg), fallback: line.fallback ? 1 : 0, low: line.lowConfidence ? 1 : 0, score: Number(line.score.toFixed(3)) };
@@ -2942,11 +2971,12 @@ function zanderBreakStrongAt(a, x, y) {
  return false;
  }
 
- function addZanderBreakRidgeFallbacks(a, lines, minLenM) {
+ function addZanderBreakRidgeFallbacks(a, lines, minLenM, shouldStop) {
  if (!a || !a.zanderBreak || !a.zanderBreak.strong) return;
  var total = a.nx * a.ny;
  var ridgeMask = new Uint8Array(total);
  var visited = new Uint8Array(total);
+ var fallbackComponents = 0;
  for (var i = 0; i < total; i++) {
  ridgeMask[i] = a.mask[i] && a.zanderBreak.strong[i] ? 1 : 0;
  }
@@ -2984,13 +3014,16 @@ function zanderBreakStrongAt(a, x, y) {
  return component;
  }
  var proximityM = Math.max(80, a.cellM * 1.2);
- for (i = 0; i < total; i++) {
+ for (i = 0; i < total && lines.length < ZANDER_BREAK_MAX_LINES; i++) {
+ if (shouldStop && shouldStop()) break;
  if (!ridgeMask[i] || visited[i]) continue;
+ fallbackComponents++;
+ if (fallbackComponents > ZANDER_BREAK_MAX_LINES) break;
  var component = collectComponent(i);
  if (component.length < 2) continue;
  var traced = zanderBreakTraceComponent(a, component, ridgeMask);
  if (!traced || traced.length < 2) continue;
- var rawLatLngs = traced.map(function (p) { return zanderBreakSegmentLatLng(a, p); });
+ var rawLatLngs = capZanderBreakLinePoints(traced.map(function (p) { return zanderBreakSegmentLatLng(a, p); }));
  var latlngs = douglasPeuckerLatLngs(rawLatLngs, Math.min(8, a.cellM * 0.16));
  var lenM = zanderBreakLineLengthM(latlngs);
  if (lenM < minLenM) continue;
@@ -3161,9 +3194,22 @@ function zanderBreakStrongAt(a, x, y) {
  }
  if (zanderBreakOverlayAnalysis === a) return;
  clearZanderBreakOverlay();
+ setDepthStatus('Piirretään kuhan taitteita…');
+ var buildStart = analysisNowMs();
+ pushAnalysisLog('render:zander-start', {
+ strong: a.zanderBreak.strongCount || 0,
+ candidates: a.zanderBreak.candidateCount || 0,
+ grid: a.nx + 'x' + a.ny
+ });
  var lines = a._zanderBreakPolylines || buildZanderBreakPolylines(a);
  a._zanderBreakPolylines = lines;
+ pushAnalysisLog('render:zander-lines', {
+ ms: Math.round(analysisNowMs() - buildStart),
+ lines: lines.length,
+ partial: lines.renderPartial ? 1 : 0
+ });
  if (!lines.length) return;
+ var addStart = analysisNowMs();
  for (var i = 0; i < lines.length; i++) {
  var line = lines[i];
  var weight = line.lowConfidence ? Math.max(2, Math.min(3.5, 1.6 + line.score * 2.2)) : Math.max(2, Math.min(5, 2 + line.score * 3));
@@ -3178,6 +3224,11 @@ function zanderBreakStrongAt(a, x, y) {
  className: line.lowConfidence ? 'zander-break-line zander-break-candidate-line' : 'zander-break-line'
  }).addTo(zanderBreakLayer);
  }
+ pushAnalysisLog('render:zander-finish', {
+ msAdd: Math.round(analysisNowMs() - addStart),
+ lines: lines.length,
+ partial: lines.renderPartial ? 1 : 0
+ });
  zanderBreakOverlayAnalysis = a;
  updateDebugOverlay();
  }
