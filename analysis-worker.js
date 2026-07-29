@@ -13,6 +13,7 @@ var CACHE_MAX_BYTES = 12 * 1024 * 1024;
 var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
+var DEPTH_FETCH_TIMEOUT_MS = 12000;
 var TILE_CACHE_PREFIX = 't:v3:';
 var RESULT_CACHE_PREFIX = 'r:v7:';
 
@@ -152,8 +153,8 @@ async function fetchTile(key) {
   var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
   try {
     var sykeResponses = await Promise.all([
-      fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
-      fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
+      fetchWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
+      fetchWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
     ]);
     if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
     tile.c = tile.c.concat(tagSource(parseContours(await sykeResponses[0].json()), 'syke'));
@@ -165,9 +166,9 @@ async function fetchTile(key) {
   var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
   try {
     var traficomResponses = await Promise.all([
-      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L'), { cache: 'no-store' }),
-      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
-      fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
+      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
+      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
+      fetchWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
     ]);
     var denied = traficomResponses.filter(function (r) { return r.status === 401 || r.status === 403; });
     if (denied.length) {
@@ -190,6 +191,19 @@ async function fetchTile(key) {
 function tagSource(features, source) {
   features.forEach(function (f) { f.source = source; });
   return features;
+}
+
+async function fetchWithTimeout(url) {
+  var controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  var timer = controller ? setTimeout(function () { controller.abort(); }, DEPTH_FETCH_TIMEOUT_MS) : null;
+  try {
+    return await fetch(url, {
+      cache: 'no-store',
+      signal: controller ? controller.signal : undefined
+    });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 async function getTile(key, stats) {

@@ -1949,6 +1949,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_MAX_ENTRIES = 150;
  var DEPTH_MAX_TILES_PER_VIEW = 35;
  var DEPTH_MEM_MAX = 60;
+ var DEPTH_FETCH_TIMEOUT_MS = 12000;
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
@@ -2062,6 +2063,19 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  }
 
+ async function fetchDepthWithTimeout(url) {
+ var controller = window.AbortController ? new AbortController() : null;
+ var timeout = controller ? setTimeout(function () { controller.abort(); }, DEPTH_FETCH_TIMEOUT_MS) : null;
+ try {
+ return await fetch(url, {
+ cache: 'no-store',
+ signal: controller ? controller.signal : undefined
+ });
+ } finally {
+ if (timeout) clearTimeout(timeout);
+ }
+ }
+
  async function getDepthTile(key) {
  var mem = depthTilesMem.get(key);
  if (mem && Date.now() - mem.t < DEPTH_TILE_TTL_MS) return mem;
@@ -2085,8 +2099,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var sykeBase = SYKE_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
  try {
  var sykeResponses = await Promise.all([
- fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine'), { cache: 'no-store' }),
- fetch(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'), { cache: 'no-store' })
+ fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.ContourLine')),
+ fetchDepthWithTimeout(sykeBase + '&typeNames=' + encodeURIComponent('inspire_el:EL.Syvyysalue'))
  ]);
  if (!sykeResponses[0].ok || !sykeResponses[1].ok) throw new Error('SYKE WFS ' + sykeResponses[0].status + '/' + sykeResponses[1].status);
  tile.c = tile.c.concat(parseContours(await sykeResponses[0].json()));
@@ -2098,9 +2112,9 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var traficomBase = TRAFICOM_DEPTH_WFS + '?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&count=4000&bbox=' + encodeURIComponent(bbox);
  try {
  var traficomResponses = await Promise.all([
- fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L'), { cache: 'no-store' }),
- fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A'), { cache: 'no-store' }),
- fetch(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'), { cache: 'no-store' })
+ fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthContour_L')),
+ fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:DepthArea_A')),
+ fetchDepthWithTimeout(traficomBase + '&typeNames=' + encodeURIComponent('rajoitettu:Sounding_P'))
  ]);
  if (!traficomResponses[0].ok || !traficomResponses[1].ok || !traficomResponses[2].ok) {
  throw new Error('Traficom WFS ' + traficomResponses[0].status + '/' + traficomResponses[1].status + '/' + traficomResponses[2].status);
