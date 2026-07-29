@@ -14,6 +14,7 @@ var CACHE_MAX_ENTRIES = 150;
 var RESULT_TTL_MS = 60 * 60 * 1000;
 var RESULT_MAX = 4;
 var DEPTH_FETCH_TIMEOUT_MS = 12000;
+var IDB_READ_TIMEOUT_MS = 2500;
 var TILE_CACHE_PREFIX = 't:v3:';
 var RESULT_CACHE_PREFIX = 'r:v7:';
 
@@ -32,6 +33,16 @@ function addStatsEvent(stats, event, data) {
   if (event.indexOf('error') !== -1 || entry.error) stats.errors.push(entry);
   if (stats.events.length > 80) stats.events = stats.events.slice(stats.events.length - 80);
   if (stats.errors.length > 40) stats.errors = stats.errors.slice(stats.errors.length - 40);
+}
+
+function withTimeout(promise, ms, label) {
+  var timer;
+  var timeout = new Promise(function (_, reject) {
+    timer = setTimeout(function () { reject(new Error(label || 'timeout')); }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(function () {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 function openDb() {
@@ -260,14 +271,16 @@ async function getTile(key, stats) {
   }
   var promise = (async function () {
     try {
-      var cached = await idbGet(TILE_CACHE_PREFIX + key);
+      var cached = await withTimeout(idbGet(TILE_CACHE_PREFIX + key), IDB_READ_TIMEOUT_MS, 'tile disk cache read timeout');
       if (cached && cached.value && Date.now() - cached.value.t < TILE_TTL_MS) {
         putMem(key, cached.value);
         if (stats) stats.disk++;
         addStatsEvent(stats, 'tile:disk', { key: key });
         return cached.value;
       }
-    } catch (e) { /* cache-luku epaonnistui, haetaan verkosta */ }
+    } catch (e) {
+      addStatsEvent(stats, 'tile:disk-error', { key: key, error: String(e && e.message || e) });
+    }
     var tile = await fetchTile(key, stats);
     if (stats) stats.fetch++;
     putMem(key, tile);
@@ -321,7 +334,7 @@ async function handleBuild(msg) {
     } };
   }
   try {
-    var diskHit = await idbGet(RESULT_CACHE_PREFIX + cacheKey);
+    var diskHit = await withTimeout(idbGet(RESULT_CACHE_PREFIX + cacheKey), IDB_READ_TIMEOUT_MS, 'analysis disk cache read timeout');
     if (diskHit && diskHit.value && diskHit.value.t && Date.now() - diskHit.value.t < RESULT_TTL_MS) {
       var diskValue = diskHit.value;
       resultCache.set(cacheKey, { t: diskValue.t, result: diskValue.result, sources: diskValue.sources || [] });

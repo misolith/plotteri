@@ -1958,6 +1958,8 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_MAX_TILES_PER_VIEW = 35;
  var DEPTH_MEM_MAX = 60;
  var DEPTH_FETCH_TIMEOUT_MS = 12000;
+ var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
+ var ANALYSIS_WORKER_TIMEOUT_MS = 45000;
  var DEPTH_KEY_PREFIX = 'depthtile:v2:';
  var depthTilesMem = new Map();
  var depthFetching = new Map();
@@ -2195,6 +2197,16 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  }
  }
 
+ function promiseWithTimeout(promise, ms, label) {
+ var timer;
+ var timeout = new Promise(function (_, reject) {
+ timer = setTimeout(function () { reject(new Error(label || 'timeout')); }, ms);
+ });
+ return Promise.race([promise, timeout]).finally(function () {
+ if (timer) clearTimeout(timer);
+ });
+ }
+
  async function fetchDepthWithTimeout(url) {
  var controller = window.AbortController ? new AbortController() : null;
  var timeout = controller ? setTimeout(function () { controller.abort(); }, DEPTH_FETCH_TIMEOUT_MS) : null;
@@ -2219,7 +2231,12 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  return depthFetching.get(key);
  }
  var promise = (async function () {
- var cached = await loadJSON(DEPTH_KEY_PREFIX + key, null);
+ var cached = null;
+ try {
+ cached = await promiseWithTimeout(loadJSON(DEPTH_KEY_PREFIX + key, null), DEPTH_CACHE_READ_TIMEOUT_MS, 'tile disk cache read timeout');
+ } catch (e) {
+ pushAnalysisLog('tile:disk-error', { key: key, error: String(e && e.message || e) });
+ }
  if (cached && cached.t && Date.now() - cached.t < DEPTH_TILE_TTL_MS) {
  putDepthMem(key, cached);
  pushAnalysisLog('tile:disk', { key: key });
@@ -3057,7 +3074,20 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  if (!worker) return Promise.reject(new Error('worker unavailable'));
  return new Promise(function (resolve, reject) {
  var id = ++analysisWorkerMsgSeq;
- analysisWorkerPending.set(id, { resolve: resolve, reject: reject, onProgress: onProgress });
+ var timer = setTimeout(function () {
+ if (!analysisWorkerPending.has(id)) return;
+ analysisWorkerPending.delete(id);
+ if (analysisWorker) {
+ analysisWorker.terminate();
+ analysisWorker = null;
+ }
+ reject(new Error('worker timeout'));
+ }, ANALYSIS_WORKER_TIMEOUT_MS);
+ analysisWorkerPending.set(id, {
+ resolve: function (value) { clearTimeout(timer); resolve(value); },
+ reject: function (error) { clearTimeout(timer); reject(error); },
+ onProgress: onProgress
+ });
  worker.postMessage(Object.assign({ id: id }, payload));
  });
  }
