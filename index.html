@@ -12,7 +12,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json?v=20260729-pwa-update-bust-1">
+<link rel="manifest" href="manifest.json?v=20260729-zander-ridge-fallback-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -617,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-pwa-update-bust-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260729-zander-ridge-fallback-1';
 
 (async function () {
  'use strict';
@@ -1965,7 +1965,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260729-pwa-update-bust-1';
+var APP_BUILD_ID = '20260729-zander-ridge-fallback-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
@@ -2894,13 +2894,105 @@ var APP_BUILD_ID = '20260729-pwa-update-bust-1';
  var maxTurn = maxTurnAngleDeg(latlngs);
  if (latlngs.length >= 2) lines.push({ latlngs: latlngs, score: traced.score, lenM: lenM, maxTurnDeg: maxTurn, rawTurnDeg: turnRaw, segments: traced.points.length - 1 });
  }
+ addZanderBreakRidgeFallbacks(a, lines, minLenM);
  lines.sort(function (aLine, bLine) { return bLine.score - aLine.score; });
  if (lines.length && typeof console !== 'undefined' && console.debug) {
  console.debug('Kuha käyräväli viivat', lines.map(function (line) {
- return { segments: line.segments, lenM: Math.round(line.lenM), turnRaw: Math.round(line.rawTurnDeg || 0), turnSimplified: Math.round(line.maxTurnDeg), score: Number(line.score.toFixed(3)) };
+ return { segments: line.segments, lenM: Math.round(line.lenM), turnRaw: Math.round(line.rawTurnDeg || 0), turnSimplified: Math.round(line.maxTurnDeg), fallback: line.fallback ? 1 : 0, score: Number(line.score.toFixed(3)) };
  }));
  }
  return lines;
+ }
+
+ function zanderBreakLineNearExisting(latlngs, existing, thresholdM) {
+ if (!latlngs || !latlngs.length || !existing || !existing.length) return false;
+ var checks = [
+ latlngs[0],
+ latlngs[Math.floor(latlngs.length / 2)],
+ latlngs[latlngs.length - 1]
+ ];
+ for (var i = 0; i < existing.length; i++) {
+ var line = existing[i].latlngs || [];
+ if (line.length < 2) continue;
+ var nearCount = 0;
+ for (var c = 0; c < checks.length; c++) {
+ var p = checks[c];
+ var best = Infinity;
+ for (var j = 1; j < line.length; j++) {
+ best = Math.min(best, latLngDistanceToSegmentM(p, line[j - 1], line[j]));
+ if (best <= thresholdM) break;
+ }
+ if (best <= thresholdM) nearCount++;
+ }
+ if (nearCount >= 2) return true;
+ }
+ return false;
+ }
+
+ function addZanderBreakRidgeFallbacks(a, lines, minLenM) {
+ if (!a || !a.zanderBreak || !a.zanderBreak.strong) return;
+ var total = a.nx * a.ny;
+ var ridgeMask = new Uint8Array(total);
+ var visited = new Uint8Array(total);
+ for (var i = 0; i < total; i++) {
+ ridgeMask[i] = a.mask[i] && a.zanderBreak.strong[i] ? 1 : 0;
+ }
+ function collectComponent(startIdx) {
+ var stack = [startIdx];
+ var component = [];
+ visited[startIdx] = 1;
+ while (stack.length) {
+ var idx = stack.pop();
+ var x = idx % a.nx;
+ var y = Math.floor(idx / a.nx);
+ component.push({
+ x: x,
+ y: y,
+ idx: idx,
+ px: x + 0.5,
+ py: y + 0.5,
+ score: zanderBreakCellScore(a, x, y)
+ });
+ for (var oy = -1; oy <= 1; oy++) {
+ for (var ox = -1; ox <= 1; ox++) {
+ if (!ox && !oy) continue;
+ var nx = x + ox;
+ var ny = y + oy;
+ if (nx < 0 || ny < 0 || nx >= a.nx || ny >= a.ny) continue;
+ var nIdx = ny * a.nx + nx;
+ if (visited[nIdx] || !ridgeMask[nIdx]) continue;
+ if (!zanderBreakCanStep(a, ridgeMask, { x: x, y: y }, nx, ny, ox, oy)) continue;
+ visited[nIdx] = 1;
+ stack.push(nIdx);
+ }
+ }
+ }
+ return component;
+ }
+ var proximityM = Math.max(80, a.cellM * 1.2);
+ for (i = 0; i < total; i++) {
+ if (!ridgeMask[i] || visited[i]) continue;
+ var component = collectComponent(i);
+ if (component.length < 2) continue;
+ var traced = zanderBreakTraceComponent(a, component, ridgeMask);
+ if (!traced || traced.length < 2) continue;
+ var rawLatLngs = traced.map(function (p) { return zanderBreakSegmentLatLng(a, p); });
+ var latlngs = douglasPeuckerLatLngs(rawLatLngs, Math.min(8, a.cellM * 0.16));
+ var lenM = zanderBreakLineLengthM(latlngs);
+ if (lenM < minLenM) continue;
+ if (zanderBreakLineNearExisting(latlngs, lines, proximityM)) continue;
+ var score = 0;
+ traced.forEach(function (p) { score = Math.max(score, p.score || 0); });
+ lines.push({
+ latlngs: latlngs,
+ score: score,
+ lenM: lenM,
+ maxTurnDeg: maxTurnAngleDeg(latlngs),
+ rawTurnDeg: maxTurnAngleDeg(rawLatLngs),
+ segments: traced.length - 1,
+ fallback: true
+ });
+ }
  }
 
  function isIndexVisibleCell(a, x, y) {
