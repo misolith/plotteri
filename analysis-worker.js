@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260729-zander-layer-balance-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260730-depth-work-coalesce-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -409,7 +409,7 @@ async function ensureTiles(keys, onProgress, opts) {
   var firstDoneAt = 0;
   var partialResolved = false;
   var partialResolve = null;
-  var minCompleteForEarlyPartial = keys.length >= 4 ? keys.length - 1 : keys.length;
+  var minCompleteForEarlyPartial = keys.length >= 6 ? keys.length - 1 : keys.length;
   var stats = { mem: 0, disk: 0, fetch: 0, wait: 0, events: [], errors: [] };
   function progress(data) {
     if (!onProgress) return;
