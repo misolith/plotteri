@@ -1,7 +1,7 @@
 // Web Worker kalapaikka-analyysin koko putkelle: WFS-haku, jasennys, tiilicache
 // (IndexedDB) ja ruudukkolaskenta. Karttasaie lahettaa vain rajat ja saa valmiin
 // ruudukon, joten isotkin nakymat eivat jumita puhelinta.
-import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260730-depth-work-coalesce-1';
+import { buildAnalysis, parseContours, parseBands, parseSoundings, wgs84ToTm35 } from './analysis.js?v=20260730-depth-work-settle-1';
 
 var SYKE_DEPTH_WFS = 'https://paikkatiedot.ymparisto.fi/geoserver/inspire_el/wfs';
 var TRAFICOM_DEPTH_WFS = 'https://julkinen.traficom.fi/inspirepalvelu/rajoitettu/wfs';
@@ -450,7 +450,7 @@ async function ensureTiles(keys, onProgress, opts) {
   var softDeadline = new Promise(function (resolve) {
     setTimeout(function () { resolve('soft'); }, DEPTH_TILES_SOFT_DEADLINE_MS);
   });
-  var winner = await Promise.race([allDone, partialReady, softDeadline]);
+  var winner = await allDone;
   if ((winner === 'soft' || winner === 'partial-ready') && results.length && done < keys.length &&
       results.some(tileUsable)) {
     stats.partial = true;

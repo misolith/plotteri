@@ -12,7 +12,7 @@
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
 <title>Kalastusplotteri</title>
-<link rel="manifest" href="manifest.json?v=20260730-depth-work-coalesce-1">
+<link rel="manifest" href="manifest.json?v=20260730-depth-work-settle-1">
 <link rel="icon" href="icons/plotteri-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="icons/plotteri-icon.svg">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" integrity="sha384-c6Rcwz4e4CITMbu/NBmnNS8yN2sC3cUElMEMfP3vqqKFp7GOYaaBBCqmaWBjmkjb" crossorigin="anonymous" />
@@ -617,7 +617,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js" integrity="sha384-Ssj6wXFm/aTdsC1FeDLrGxP3/PooxBGcOqehkmt8CbKQOcei4CDaRbreAUvdFNrq" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/nosleep/0.12.0/NoSleep.min.js" integrity="sha384-lp0XiAMtqqqjyVLBYjAcDQzxc2XyGj3sGESoiWbccHdpXjNUPUjWrq5GMqaGHGp9" crossorigin="anonymous"></script>
 <script type="module">
-import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260730-depth-work-coalesce-1';
+import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, dayScore, pressureTrend, SCORE_WEIGHTS, SPECIES_TRAITS, estimateThermoclineDepth, stratificationFactor } from './analysis.js?v=20260730-depth-work-settle-1';
 
 (async function () {
  'use strict';
@@ -1965,7 +1965,7 @@ import { wgs84ToTm35, parseContours, parseBands, parseSoundings, buildAnalysis, 
  var DEPTH_CACHE_READ_TIMEOUT_MS = 2500;
  var ANALYSIS_WORKER_TIMEOUT_MS = 30000;
  var ANALYSIS_WORKER_STALL_TIMEOUT_MS = 15000;
-var APP_BUILD_ID = '20260730-depth-work-coalesce-1';
+var APP_BUILD_ID = '20260730-depth-work-settle-1';
  var ANALYSIS_WORKER_URL = 'analysis-worker.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var MAP_SW_URL = 'map-sw.js?v=' + encodeURIComponent(APP_BUILD_ID);
  var DEPTH_KEY_PREFIX = 'depthtile:v4:';
@@ -3817,6 +3817,14 @@ function storeAnalysisResult(key, result, paramsKey) {
  lat >= lastAnalysis.south && lat <= lastAnalysis.north;
  }
 
+ function analysisSatisfiesCurrentDemand(force) {
+ if (!lastAnalysis || !lastAnalysis.hasData) return false;
+ if (lastAnalysis.reqCellM !== analysisCellM()) return false;
+ if (lastAnalysisParamsKey !== analysisParamsKey()) return false;
+ if (analysisCoversView()) return true;
+ return !!(force && currentPos && analysisCoversPoint(currentPos.lat, currentPos.lon));
+ }
+
  function setCompletedAnalysisStatus(a) {
  if (!a) return;
  var usesTraficom = (a.sources || []).indexOf('Traficom') !== -1;
@@ -3887,6 +3895,11 @@ function storeAnalysisResult(key, result, paramsKey) {
  var queuedForce = depthWorkQueuedForce;
  depthWorkQueued = false;
  depthWorkQueuedForce = false;
+ if (analysisSatisfiesCurrentDemand(queuedForce)) {
+ pushAnalysisLog('run:queued-skip', { force: queuedForce ? 1 : 0, reason: 'current-analysis-covers-demand' });
+ updateDebugOverlay();
+ return;
+ }
  depthWorkTimer = setTimeout(function () { runDepthWork(queuedForce); }, 300);
  }
  }
@@ -4007,6 +4020,7 @@ function storeAnalysisResult(key, result, paramsKey) {
  }
  lastAnalysis = a;
  lastAnalysisParamsKey = analysisParamsKey();
+ lastAnalysis._analysisParamsKey = lastAnalysisParamsKey;
  var indexRenderStart = analysisNowMs();
  if (map.hasLayer(fishIndexLayer)) drawIndexOverlay(a); else clearIndexOverlay();
  var indexRenderMs = Math.round(analysisNowMs() - indexRenderStart);
